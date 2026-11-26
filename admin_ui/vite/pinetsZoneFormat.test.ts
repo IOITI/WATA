@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { PINETS_HELPER, PINETS_ZONE_PATCHES, patchPinets, pinetsZoneFormat } from './pinetsZoneFormat.ts'
+import { PINETS_HELPER, PINETS_ZONE_PATCHES, ZONE_MOMENTS_KEPT, patchPinets, pinetsZoneFormat } from './pinetsZoneFormat.ts'
 import { extractWorkerSource, velaPinetsBundlePath } from './velaPineWorker.ts'
 
 /** A build of the installed PineTS, by its file name. */
@@ -136,6 +136,55 @@ describe('PineTS keeping a formatter per time zone', () => {
     const newYork = CHANGES[3]
     expect([after['New York hour'].get(newYork - HALF_HOUR), after['New York hour'].get(newYork + HALF_HOUR)]).toEqual([1, 1])
     expect(after['New York 9:30'].get(newYork + 6 * HALF_HOUR)).toBe(Date.UTC(2026, 10, 1, 14, 30))
+  })
+
+  it('asks a formatter once for a moment a script reads again and again, and gives what PineTS gave', async () => {
+    const build = pinetsBuild('pinets.min.es.js')
+    const format = OriginalFormat.prototype.formatToParts
+    async function asked<T>(run: () => Promise<T>): Promise<[T, number]> {
+      let times = 0
+      OriginalFormat.prototype.formatToParts = function counted(this: Intl.DateTimeFormat, ...given: [Date | number | undefined]) {
+        times += 1
+        return format.apply(this, given)
+      }
+      try {
+        return [await run(), times]
+      } finally {
+        OriginalFormat.prototype.formatToParts = format
+      }
+    }
+    const [before, askedBefore] = await asked(async () => plotsOf(await pinetsOf(build)))
+    const [after, askedAfter] = await asked(async () => plotsOf(await pinetsOf(patchPinets(build))))
+
+    for (const [title, values] of Object.entries(before)) expect([...after[title].entries()]).toEqual([...values.entries()])
+    // The script reads Paris's hour, minute and weekday of each bar, and two session starts that are the same all day:
+    // six questions a bar before; after, one a bar for each time zone, and each session start once a day.
+    expect(askedBefore).toBeGreaterThanOrEqual(6 * CANDLES.length)
+    expect(askedAfter).toBeLessThan(2.5 * CANDLES.length)
+  })
+
+  it('keeps what a formatter said of its last few moments, and no more', () => {
+    const parts = new Function(`${PINETS_HELPER}; return __wataZoneParts`)() as (key: string, at: number, make: () => object) => object
+    let made = 0
+    const make = () => ({ made: (made += 1) })
+
+    const first = parts('moment Europe/Paris', 1000, make)
+    expect(parts('moment Europe/Paris', 1000, make)).toBe(first)
+    // Another formatter's answer for the same moment is its own.
+    expect(parts('moment America/New_York', 1000, make)).not.toBe(first)
+    expect(made).toBe(2)
+    for (let at = 2000; at < 2000 + ZONE_MOMENTS_KEPT; at += 1) parts('moment Europe/Paris', at, make)
+    // Past what is kept, the oldest are asked again; the other formatter's are still there.
+    expect(parts('moment Europe/Paris', 1000, make)).not.toBe(first)
+    const asked = made
+    parts('moment America/New_York', 1000, make)
+    expect(made).toBe(asked)
+    // What a formatter refuses (a time zone it does not know) is refused each time, never kept.
+    const refuse = () => {
+      throw new RangeError('Invalid time zone')
+    }
+    expect(() => parts('moment Nowhere', 1, refuse)).toThrow(RangeError)
+    expect(() => parts('moment Nowhere', 1, refuse)).toThrow(RangeError)
   })
 
   it('stops the build when PineTS changed', () => {

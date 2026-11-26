@@ -1,8 +1,24 @@
 # Changelog
 
+## v0.104.0 - A script's runs keep only what its rule reads
+
+**Release date:** 2026-11-26
+
+Could a live rule's script be compiled to run faster? Measured first: a live rule's new bar costs under a millisecond, its run being continued, so there is nothing to gain there. What costs is a whole run over all of a rule's bars: each day of a backtest, each start and daily restart of the engine, the check of a continued run every ten minutes, and every bar of a rule that fell back to whole runs. On the live Kernel VWAP script and the engine day of 25 November (23,160 bars with its history day, on a Mac), a whole run took 3.8 s and 4.45 s with its answer read, and most of what it made was never read: the script raises an alert at about every bar ("In Long", "In Short", "Not In Trade") where the rule maps five other titles, and draws sixteen plots where the rule reads none. One load answered 23,182 alerts and 579,000 plot values, 19.8 MB, for 9 signals.
+
+- **A run keeps and answers only what its rule reads**: the alerts the rule maps to something, and its plots only when it reads one (its confidence plot, or a `{{plot…}}` in an alert's message). PineTS is given no point to keep for a plot nobody reads, and no alert the rule ignores; what the script computes is untouched, and its signals are the same. The engine asks so for every rule, a backtest for every day. A study, the replay command, the rule check and the pages read everything, as before.
+- **What a time-zone formatter said of a moment is kept**: a script asks the hour then the minute of the same bar, those of the bar before, the same session start at every bar; formatting was 15 % of the run. This one also reaches the charts.
+- **Measured on that day, the same 9 signals**: a whole run with its answer 4.45 s → 2.7 s; the answer 19.8 MB → 15 kB; the check of a continued run 3.8 s → 2.7 s; a held run about 540 MB → 343 MB of the runner's process; a new bar's answer 1.4 kB → 118 bytes. Not measured on the server yet, where the same runs took 8.6 to 10.3 s.
+- **A continued run that keeps no plot is checked on the script's own variables**: each one, at each bar since the last check, against a whole run's. It says more than its plots did. It agreed over 3,000 appended bars of the live script, and a value changed by hand is caught.
+- **A benchmark of the runner** (`python -m src.ta_engine.bench`): a rule's runs on a recorded day, whole as a backtest gives them and continued as the engine does, with the answer's size, the runner's memory, where the time goes (`--profile`) and another script's signals beside (`--against`).
+- **What a script cut down for its rule would add**: a copy of the live script without its plots, its confidence score and the six alerts the rule ignores ran whole in 1.9 s against 2.7 s, the same signals. Not built: it waits for a decision.
+- **Native compilers, read and not run**: PineForge (Pine v6 to C++) refuses `indicator()` scripts by its own documentation, running strategies only, and knows no `alertcondition`; QPACE compiles a library's functions to Rust and has no alerts either. Neither takes the live script as it is: it would have to be written again for another engine, and held to PineTS's signals for good.
+- The Engine monitor's alerts of a run are those the rule reads.
+- Every backtest turns stale (the runner and the replay changed). Changes the TA engine and the admin.
+
 ## v0.103.0 - A signal reaches its order sooner, and as soon after a quiet hour
 
-**Release date:** not released yet
+**Release date:** 2026-11-26
 
 Where the time went from a bar's close to Saxo's fill was read on the live rule's first entries and on the logs of 28 signals (23 to 26 November 2026). At best 0.55 s: 0.15 s of fixed waits before the engine's tick, about 0.13 s of WATA's own work, and Saxo's 0.27 s. But two of the three entries took 0.8 to 1.0 s. A signal that came after a quiet hour or more was slow at every step: the web server's reception 86 to 234 ms instead of 3 to 9, the trader's pick-up 58 to 171 ms instead of 5 to 9, its checks 35 to 94 ms instead of 3 to 12, the engine's own sending 0.1 to 0.3 s more. What a signal runs through had gone cold, in each service. The server has no swap and no memory pressure, so the cause is not proven (most likely its host taking back memory left alone); the remedy does not depend on it.
 

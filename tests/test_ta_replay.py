@@ -40,7 +40,7 @@ FAKE_RUNNER = textwrap.dedent("""
             with open(LOG, "a") as log:
                 log.write(json.dumps({"rule": message["rule"], "bars": len(bars), "first": bars[0][0], "last": bars[-1][0],
                                       "inputs": message["inputs"], "timeframe": message["timeframe"],
-                                      "detail": message.get("detail", False)}) + "\\n")
+                                      "detail": message.get("detail", False), "reads": message.get("reads")}) + "\\n")
             alerts = []
             for bar in bars:
                 minute, hour = (bar[0] // 60000) % 60, (bar[0] // 3600000) % 24
@@ -371,3 +371,52 @@ def test_capital_coms_day_files_give_the_decimals_its_prices_carry(tmp_path):
 
     # One decimal, as the feed's table says it: R60 is 6 points, as the TA engine counts it.
     assert len(found) == 30 and decimals == 1
+
+
+# ── what the runner is asked to keep and answer ──
+
+def test_a_lean_session_asks_the_runner_for_what_its_rule_reads_alone_and_a_study_for_everything(tmp_path):
+    files = tmp_path / "recorded"
+    write_rows(str(files / "saxo" / "index.csv.gz"), index_rows(date(2026, 10, 13), 6, 20) + index_rows(date(2026, 10, 14), 6, 20))
+    command, log = fake_runner(tmp_path)
+    rule = {**rule_on(), "alerts": [{"title": "Enter Long", "action": "long"}, {"title": "Exit", "action": "ignore"},
+                                    {"title": "Enter Short", "action": "message"}]}
+    begin, end = engine_windows(int(datetime(2026, 10, 14, 12, tzinfo=timezone.utc).timestamp()),
+                                int(datetime(2026, 10, 14, 13, tzinfo=timezone.utc).timestamp()), 21 * 60 + 15)[0]
+
+    async def loaded(**session):
+        replay = ReplaySession(rule, EngineRule(rule=rule, source="//@version=6"), AssetRows(str(tmp_path), files_root=str(files)),
+                               history_days=1, command=command, **session)
+        await replay.start()
+        try:
+            await replay.window(begin, end)
+            await replay.window(begin, end, detail=True)
+        finally:
+            await replay.stop()
+
+    asyncio.run(loaded(lean=True))
+    asyncio.run(loaded())
+    asyncio.run(loaded(lean=True, messages=True))
+
+    lean, lean_detail, plain, plain_detail, every, _ = loads(log)
+    # A backtest's way: the alerts the rule maps to something, no alert() call, no plot.
+    assert lean["reads"] == {"alerts": ["Enter Long", "Enter Short"], "alert_calls": False, "plots": False}
+    # A study in detail reads every plot at every bar; a replay asked for its alerts reads every alert.
+    assert lean_detail["reads"] is None and plain["reads"] is None and plain_detail["reads"] is None
+    # Every alert read as a message: none is left out.
+    assert every["reads"] == {"alerts": None, "alert_calls": True, "plots": False}
+
+
+def test_a_rule_reads_its_plots_only_when_it_names_one():
+    from src.ta_engine.signals import reads_of
+
+    rule = rule_on()
+    assert reads_of(rule) == {"alerts": ["Enter Long", "Enter Short", "Exit"], "alert_calls": False, "plots": False}
+    assert reads_of({**rule, "alert_calls": "message"})["alert_calls"] is True
+    assert reads_of({**rule, "confidence_plot": "Confidence"})["plots"] is True
+    # A plot an alert's message may name, by its place or by its title: kept in doubt, comments included.
+    by_place = 'alertcondition(up, title = "Up", message = \'{"confidence": {{plot_0}}}\')'
+    assert reads_of(rule, ("//@version=6", by_place))["plots"] is True
+    assert reads_of(rule, ('alert("rsi " + "{{plot(\\"RSI\\")}}")',))["plots"] is True
+    assert reads_of(rule, ("//@version=6\nplot(close)", "library(\"L\")"))["plots"] is False
+    assert reads_of({**rule, "alerts": []}, every_alert=True) == {"alerts": None, "alert_calls": True, "plots": False}

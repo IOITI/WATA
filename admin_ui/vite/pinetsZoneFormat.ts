@@ -7,6 +7,13 @@
 // same). A formatter never changes once made: this plugin keeps the one made for
 // each time zone, where PineTS makes them.
 //
+// What a formatter says of one moment never changes either, and a script asks it
+// again and again: the hour then the minute of the same bar, those of the bar before,
+// the same session start at every bar of a day. Formatting was still 15 % of a run of
+// the live Kernel VWAP script once its formatters were kept (measured 2026-11-26 on
+// 23,160 bars: 733 of 4,826 ms). The last few moments a formatter was asked are kept
+// with what it said (ZONE_MOMENTS_KEPT of them, by formatter).
+//
 // PineTS ships three times in the admin: in the TA engine's runner
 // (vite.runner.config.ts, from pinets.min.es.js), in the pages' Pine worker
 // (vite.config.ts, `worker.plugins`, from pinets.min.browser.es.js) and in
@@ -30,9 +37,16 @@ export const PINETS_PATCH_TAG = 'zone-format'
 
 // The formatter `make` gives for `key` (what it formats, and its time zone), made once.
 const HELPER = '__wataZoneFormat'
+// What the formatter of `key` says of the moment `at` (epoch ms), read once: PineTS only reads the parts it gets.
+const PARTS = '__wataZoneParts'
+/** The moments kept per formatter: the bar, the one before, and a few a script reads at every bar (a session's start and end). */
+export const ZONE_MOMENTS_KEPT = 8
 export const PINETS_HELPER =
   `\nfunction ${HELPER}(key,make){const kept=${HELPER}.kept||(${HELPER}.kept=new Map);` +
-  'let format=kept.get(key);if(format===void 0){format=make();kept.set(key,format)}return format}\n'
+  'let format=kept.get(key);if(format===void 0){format=make();kept.set(key,format)}return format}\n' +
+  `function ${PARTS}(key,at,make){const all=${PARTS}.kept||(${PARTS}.kept=new Map);` +
+  'let said=all.get(key);if(said===void 0){said=new Map;all.set(key,said)}' +
+  `let parts=said.get(at);if(parts===void 0){parts=make();if(said.size>=${ZONE_MOMENTS_KEPT})said.clear();said.set(at,parts)}return parts}\n`
 
 // Both are made with the time zone as `e`, in the functions the patches change.
 const FIELDS = 'year:"numeric",month:"numeric",day:"numeric",hour:"numeric",minute:"numeric",second:"numeric"'
@@ -43,12 +57,12 @@ export const PINETS_ZONE_PATCHES: PinetsPatch[] = [
   {
     what: 'the parts of a moment in a time zone (hour(), minute(), dayofweek()...)',
     find: `${OF_A_MOMENT}.formatToParts(new Date(t))`,
-    replace: `${HELPER}("moment "+e,()=>${OF_A_MOMENT}).formatToParts(new Date(t))`,
+    replace: `${PARTS}("moment "+e,t,()=>${HELPER}("moment "+e,()=>${OF_A_MOMENT}).formatToParts(new Date(t)))`,
   },
   {
     what: 'a moment from its date and time in a time zone (timestamp())',
     find: `${OF_A_TIMESTAMP}.formatToParts(l)`,
-    replace: `${HELPER}("timestamp "+e,()=>${OF_A_TIMESTAMP}).formatToParts(l)`,
+    replace: `${PARTS}("timestamp "+e,l.getTime(),()=>${HELPER}("timestamp "+e,()=>${OF_A_TIMESTAMP}).formatToParts(l))`,
   },
 ]
 

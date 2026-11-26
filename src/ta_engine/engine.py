@@ -79,7 +79,7 @@ from src.ta_engine.monitoring import APPEND, LOAD, RUN_ENDED, RUN_FAILED, CheckM
 from src.ta_engine.rules import EngineRule, RulesSnapshot
 from src.ta_engine.runner import RunnerDown, RunnerFailed
 from src.ta_engine.settings import SECTION
-from src.ta_engine.signals import Candidate, interpret, payload, settled
+from src.ta_engine.signals import Candidate, interpret, payload, reads_of, settled
 from src.ta_engine.tickers import parse_ticker
 from src.trade.signal_sources import ENGINE, source_of
 
@@ -658,6 +658,9 @@ class Engine:
             "timeframe": rule.timeframe(),
             "bars": bars,
             "continued": continued,
+            # All the runner keeps and answers of the rule's runs: the alerts it maps, and its plots only if it
+            # reads one. A script may raise an alert at every bar and draw twenty plots for five alerts read.
+            "reads": reads_of(rule.rule, (rule.source, *(entry["source"] for entry in rule.libraries))),
         }
 
     async def _request(self, run: RuleRun, kind: str, message: dict, bars: list, now: float) -> dict:

@@ -51,7 +51,7 @@ from src.admin.ta_scripts import ScriptNotFound, ScriptStore
 from src.ta_engine.bars import RangeBars, TimeBars
 from src.ta_engine.rules import EngineRule
 from src.ta_engine.runner import RUNNER_PATH, NodeRunner, RunnerDown, RunnerFailed, find_node, runner_command
-from src.ta_engine.signals import Candidate, interpret, iso_seconds, settled
+from src.ta_engine.signals import Candidate, interpret, iso_seconds, reads_of, settled
 from src.ta_engine.tickers import Ticker, parse_ticker
 
 DAY = 86_400
@@ -397,8 +397,11 @@ class ReplaySession:
     def __init__(self, rule: dict, engine_rule: EngineRule, rows: AssetRows, *, node: str = "node",
                  history_days: int = 1, restart_minute: int = 21 * 60 + 15, messages: bool = False,
                  memory_mb: int = 1024, timeout_seconds: int = 600, command: list[str] | None = None,
-                 cache: str | None = None, on_window=None):
+                 cache: str | None = None, on_window=None, lean: bool = False):
         self.rule = rule
+        # The runner keeps and answers only what the rule reads of its script's runs (``reads_of``): a backtest's
+        # way, and the engine's. A replay asked for its alerts, and a study, read every alert: not theirs.
+        self.lean = lean
         # Told each engine day's start, its bars and the runner's peak memory so far, before the runner gets them:
         # what a run that dies is said to have died on.
         self.on_window = on_window
@@ -482,25 +485,25 @@ class ReplaySession:
         start, end = ask.get("from"), ask.get("to")
         return [bar for bar in bars if (start is None or bar[0] >= start) and (end is None or bar[0] <= end)]
 
-    async def window(self, begin: int, end: int, *, period: tuple[int, int] | None = None,
-                     detail: bool = False) -> ReplayedWindow:
-        """
-        One day of the engine. Its alerts are those whose bar closed in it, and
-        began in ``period`` when one is given. Raises RunnerFailed when the
-        script fails on its bars. In ``detail`` (a study of the script, never a
-        backtest), each plot at every bar comes back too; such a run is never kept.
-        """
-        rule, engine_rule = self.rule, self.engine_rule
+    async def day_bars(self, begin: int, end: int) -> tuple[list, int]:
+        """The rule's bars of the engine day from ``begin`` to ``end``, built from ``history_days`` before it, and where they begin."""
+        rule = self.rule
         anchor = begin - self.history_days * DAY
         self._current.update(anchor=anchor, end=end)
         found, decimals = await self.rows.rows(rule["asset"]["provider"], rule["asset"]["key"], anchor, end)
         if rule["bars"]["type"] == "range":
             decimals = _decimals(found, decimals)
         refusal = too_large(f"{rule['asset']['provider']}/{rule['asset']['key']}", rule["bars"], decimals)
-        bars = built_bars(_builder(rule["bars"], rule["side"], found, decimals), found, end, refusal)
-        window = ReplayedWindow(begin=begin, end=end, history_from=anchor, bars=len(bars), strategy_bars=bars)
-        if not bars:
-            return window
+        return built_bars(_builder(rule["bars"], rule["side"], found, decimals), found, end, refusal), anchor
+
+    def load_request(self, bars: list, *, full: bool | None = None) -> dict:
+        """
+        What the runner is asked to load an engine day's ``bars`` with: the rule's script and, for a ``lean``
+        session, what the rule reads of its runs (``reads_of``), which is then all the runner keeps and
+        answers. ``full`` says otherwise for one request: every alert and every plot, as every load asked
+        until v0.104.0 (a study's detail, the benchmark's comparison).
+        """
+        rule, engine_rule = self.rule, self.engine_rule
         request = {
             "op": "load", "rule": REPLAY_RULE_ID,
             "script": {"source": engine_rule.source, "sha256": rule["script"]["sha256"]},
@@ -513,6 +516,25 @@ class ReplaySession:
             "timeframe": engine_rule.timeframe(),
             "bars": bars,
         }
+        if not (not self.lean if full is None else full):
+            sources = (engine_rule.source, *(entry["source"] for entry in engine_rule.libraries))
+            request["reads"] = reads_of(rule, sources, every_alert=self.messages)
+        return request
+
+    async def window(self, begin: int, end: int, *, period: tuple[int, int] | None = None,
+                     detail: bool = False) -> ReplayedWindow:
+        """
+        One day of the engine. Its alerts are those whose bar closed in it, and
+        began in ``period`` when one is given. Raises RunnerFailed when the
+        script fails on its bars. In ``detail`` (a study of the script, never a
+        backtest), each plot at every bar comes back too; such a run is never kept.
+        """
+        rule, engine_rule = self.rule, self.engine_rule
+        bars, anchor = await self.day_bars(begin, end)
+        window = ReplayedWindow(begin=begin, end=end, history_from=anchor, bars=len(bars), strategy_bars=bars)
+        if not bars:
+            return window
+        request = self.load_request(bars, full=True if detail else None)
         if self.on_window is not None:
             self.on_window(begin, len(bars), self.runner.peak_mb())
         try:

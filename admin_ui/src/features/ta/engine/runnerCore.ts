@@ -33,6 +33,19 @@
 // A study of a script (src/research/study.py, Claude's pine_run) asks a load in
 // detail: every bar's plot values and PineTS's runtime warnings come back too.
 // Without it the answer is what the engine has always had.
+//
+// A load may say what its rule reads of the script's runs (`reads`: the alerts it
+// maps to something, whether it reads a plot at all). The runner then keeps and
+// answers that alone: PineTS is given no point to keep for a plot nobody reads and
+// no alert of a title the rule ignores, and the answer holds neither. A script
+// may raise an alert at every bar and draw twenty plots for a rule that reads five
+// alerts: measured on the live Kernel VWAP script (2026-11-26, 23,160 bars), a
+// load answered 23,182 alerts and 579,000 plot values, 19.8 MB, for 9 signals.
+// What the script computes is untouched, so its alerts are what they were. A
+// continued run that keeps no plot is checked on the script's own variables
+// instead, each one at each bar since the last check, which says more than its
+// plots did. Without `reads` (a study, a replay asked for every alert, the
+// pages) everything is kept and answered as before.
 
 import { Indicator, PineTS } from 'pinets'
 import type { Context, IPineInput } from 'pinets'
@@ -64,6 +77,16 @@ export interface PinnedLibrary extends PinnedSource {
   version: number
 }
 
+/** What a rule reads of its script's runs: all the runner then keeps and answers of them. */
+export interface Reads {
+  /** The titles of the alertconditions it reads; null for every one. */
+  alerts: string[] | null
+  /** Whether it reads the script's alert() calls. */
+  alert_calls: boolean
+  /** Whether it reads a plot at all: none is kept otherwise. */
+  plots: boolean
+}
+
 export interface LoadRequest {
   id: number
   op: 'load'
@@ -80,6 +103,8 @@ export interface LoadRequest {
   detail?: boolean
   /** Each new bar continues the run where it stopped, when the script allows it: the engine's, never a replay's. */
   continued?: boolean
+  /** What the rule reads of the runs: only that is kept and answered. Never with `detail`, which reads everything. */
+  reads?: Reads
 }
 
 export type RunnerRequest =
@@ -217,6 +242,8 @@ interface Loaded {
   size: number
   /** Its run was let go for the runner's heap. */
   forHeap: boolean
+  /** What its rule reads of its runs; null when everything is kept and answered. */
+  reads: Reads | null
 }
 
 /**
@@ -241,6 +268,97 @@ function internalsOf(pine: PineTS): PineInternals | null {
 /** Why a whole run is needed when the PineTS of this runner has no loop to continue a run with. */
 export const NO_WAY_TO_CONTINUE = 'this PineTS has no way to continue a run'
 
+/** ``reads`` as a load gave it, when it is what it should be; null (everything is read) otherwise. */
+export function checkedReads(given: unknown): Reads | null {
+  if (given === null || typeof given !== 'object') return null
+  const { alerts, alert_calls: calls, plots } = given as Partial<Reads>
+  const titles = alerts === null || (Array.isArray(alerts) && alerts.every((title) => typeof title === 'string'))
+  if (!titles || typeof calls !== 'boolean' || typeof plots !== 'boolean') return null
+  return { alerts: alerts === null ? null : [...(alerts as string[])], alert_calls: calls, plots }
+}
+
+/** Whether a rule reads an alert as PineTS raised it: an alertcondition by its title, an alert() call by the rule's word. */
+export function readsAlert(reads: Reads, alert: { type: string; title?: unknown; message?: unknown }): boolean {
+  if (alert.type !== 'alertcondition') return reads.alert_calls
+  if (reads.alerts === null) return true
+  const { title } = alertParts({ title: alert.title, message: typeof alert.message === 'string' ? alert.message : '' })
+  return title !== null && reads.alerts.includes(title)
+}
+
+/** What PineTS binds a script's drawing of plots to, on a run's context: functions, and namespaces called through `any`. */
+const PLOT_FUNCTIONS = ['plotchar', 'plotshape', 'plotarrow', 'plotbar', 'plotcandle', 'bgcolor', 'barcolor']
+const PLOT_NAMESPACES = ['plot', 'hline', 'fill']
+
+interface ContextLike {
+  pine?: Record<string, unknown>
+  alerts?: unknown[]
+}
+
+/**
+ * A run's context made to keep only what the rule reads. With no plot read, the script's plots keep no point:
+ * each call answers null, as PineTS's own do in the runs it makes for request.security (silentInSecondary),
+ * whose code already lives with it. An alert the rule does not read is not kept as PineTS raises it.
+ */
+export function keepOnlyRead(context: ContextLike, reads: Reads): void {
+  const pine = context.pine
+  if (!reads.plots && pine) {
+    const none = () => null
+    for (const name of PLOT_FUNCTIONS) if (typeof pine[name] === 'function') pine[name] = none
+    for (const name of PLOT_NAMESPACES) {
+      const namespace = pine[name] as { any?: unknown } | undefined
+      if (namespace && typeof namespace.any === 'function') namespace.any = none
+    }
+  }
+  const kept = context.alerts
+  if (Array.isArray(kept)) {
+    const push = (...raised: { type: string; title?: unknown; message?: unknown }[]) => {
+      for (const alert of raised) if (readsAlert(reads, alert)) Array.prototype.push.call(kept, alert)
+      return kept.length
+    }
+    Object.defineProperty(kept, 'push', { value: push, writable: true, configurable: true, enumerable: false })
+  }
+}
+
+/**
+ * The contexts this PineTS makes for its runs keep only what the rule reads. False when this PineTS has no such
+ * place to do it from (`_initializeContext`, not public): everything is then kept, and the answer alone is cut.
+ */
+function keepingOnlyRead(pine: PineTS, reads: Reads): boolean {
+  const found = pine as unknown as { _initializeContext?: (...given: unknown[]) => unknown }
+  const make = found._initializeContext
+  if (typeof make !== 'function') return false
+  found._initializeContext = function initialized(this: unknown, ...given: unknown[]) {
+    const context = make.apply(this, given)
+    if (context !== null && typeof context === 'object') keepOnlyRead(context as ContextLike, reads)
+    return context
+  }
+  return true
+}
+
+/** A script's variable at the bars compared: a number, a string, a boolean; anything else (an array, an object) is not compared. */
+type VariableValue = number | string | boolean | null | undefined
+
+/** Each of a script's own variables (`var`, `let`, `const`: PineTS keeps one value a bar), at its last ``last`` values. */
+export function variablesOver(context: unknown, last: number): Record<string, VariableValue[]> {
+  const values: Record<string, VariableValue[]> = {}
+  const holder = context as Record<string, unknown> | null
+  if (holder === null || typeof holder !== 'object' || last <= 0) return values
+  for (const kind of ['var', 'let', 'const']) {
+    const variables = holder[kind]
+    if (variables === null || typeof variables !== 'object') continue
+    for (const [name, series] of Object.entries(variables as Record<string, { data?: unknown }>)) {
+      const data = series?.data
+      if (!Array.isArray(data)) continue
+      values[`${kind} ${name}`] = data.slice(-last).map((value) => {
+        if (value === null || typeof value === 'string' || typeof value === 'boolean') return value
+        if (typeof value === 'number') return Number.isNaN(value) ? null : value
+        return undefined
+      })
+    }
+  }
+  return values
+}
+
 function moment(time: number): string {
   return new Date(time).toISOString().replace('.000Z', 'Z')
 }
@@ -249,15 +367,21 @@ function shown(value: unknown): string {
   return typeof value === 'string' ? JSON.stringify(value) : String(value)
 }
 
+/** One side of a check: what a run raised and drew at the bars compared, and its variables at those bars and after them. */
+export interface Compared {
+  alerts: RunnerAlert[]
+  plots: PlotValues
+  /** Each variable's last values, the last of all being the one PineTS carries to the next bar; ``times`` the bars before it. */
+  variables?: Record<string, VariableValue[]>
+  times?: number[]
+}
+
 /**
  * What differs between a continued run's answer and a whole run's over the same bars (alerts by their bar,
- * call, title and message; plots, keyed as PineTS keys them, at the bars asked): a few, the first bars first.
+ * call, title and message; plots, keyed as PineTS keys them, at the bars asked; the script's variables at
+ * each bar, where they are compared): a few, the first bars first.
  */
-export function differencesOf(
-  continued: { alerts: RunnerAlert[]; plots: PlotValues },
-  whole: { alerts: RunnerAlert[]; plots: PlotValues },
-  most = MAX_DIFFERENCES,
-): string[] {
+export function differencesOf(continued: Compared, whole: Compared, most = MAX_DIFFERENCES): string[] {
   const found: [number, string][] = []
   const key = (alert: RunnerAlert) => JSON.stringify([alert.time, alert.id, alert.title, alert.message])
   const named = (alert: RunnerAlert) => `${alert.type} ${JSON.stringify(alert.title ?? alert.id)} at ${moment(alert.time)}`
@@ -271,6 +395,24 @@ export function differencesOf(
     for (const time of new Set([...Object.keys(mine), ...Object.keys(other)])) {
       const [a, b] = [mine[time], other[time]]
       if (a !== b) found.push([Number(time), `plot ${JSON.stringify(plot)} at ${moment(Number(time))}: ${shown(a)} continued, ${shown(b)} whole`])
+    }
+  }
+  const [kept, fresh] = [continued.variables ?? {}, whole.variables ?? {}]
+  const times = continued.times ?? whole.times ?? []
+  const latest = times.at(-1) ?? 0
+  for (const name of new Set([...Object.keys(kept), ...Object.keys(fresh)])) {
+    const [a, b] = [kept[name], fresh[name]]
+    if (a === undefined || b === undefined) {
+      found.push([latest, `variable ${JSON.stringify(name)} only in the ${a === undefined ? 'whole' : 'continued'} run`])
+      continue
+    }
+    // From the end: the last value of each is the one carried to the next bar, the one before it the last bar's.
+    for (let back = 0; back < Math.max(a.length, b.length); back += 1) {
+      const [x, y] = [a[a.length - 1 - back], b[b.length - 1 - back]]
+      if (x === y) continue
+      const time = back === 0 ? latest : (times[times.length - back] ?? latest)
+      found.push([time, `variable ${JSON.stringify(name)} at ${moment(time)}: ${shown(x)} continued, ${shown(y)} whole`])
+      break
     }
   }
   return found.sort((first, second) => first[0] - second[0]).slice(0, most).map(([, said]) => said)
@@ -442,8 +584,9 @@ export class Runner {
       indicator = new Indicator(prepared.source, inputs)
       indicator.prepare()
     }
-    // A study never adds a bar: what it loads is never held.
+    // A study never adds a bar: what it loads is never held. And it reads everything.
     const continued = request.continued === true && request.detail !== true
+    const reads = request.detail === true ? null : checkedReads(request.reads)
     const loaded: Loaded = {
       indicator,
       compiled,
@@ -457,6 +600,7 @@ export class Runner {
       checked: 0,
       size: 0,
       forHeap: false,
+      reads,
     }
     const hold = continued && loaded.whole === null
     // A run to hold is measured: the heap before it, then with it.
@@ -530,6 +674,7 @@ export class Runner {
     const chart = { symbol: loaded.ticker, timeframe: loaded.timeframe, bars: loaded.candles }
     const pine = new PineTS(new SeriesProvider(chart, this.ask), loaded.ticker, loaded.timeframe, loaded.candles.length)
     pine.setAlertMode('all')
+    if (loaded.reads) keepingOnlyRead(pine, loaded.reads)
     return { pine, context: await pine.run(loaded.indicator) }
   }
 
@@ -606,9 +751,12 @@ export class Runner {
     const milliseconds = Math.round(performance.now() - started)
     const since = loaded.candles[loaded.checked].openTime
     const times = new Set(loaded.candles.slice(loaded.checked).map((candle) => candle.openTime))
-    const answer = (context: Context) => ({
-      alerts: this.alertsFrom(context, since),
+    // A run that keeps no plot is compared on the script's own variables: each one, at each bar since the last check.
+    const barTimes = [...times]
+    const answer = (context: Context): Compared => ({
+      alerts: this.alertsFrom(context, since, loaded.reads),
       plots: plotValuesAt(context.plots as Record<string, PlotLike>, times, true),
+      ...(loaded.reads ? { variables: variablesOver(context, barTimes.length + 1), times: barTimes } : {}),
     })
     const differences = differencesOf(answer(held.context), answer(fresh.context))
     const figures = {
@@ -655,8 +803,8 @@ export class Runner {
     }
   }
 
-  /** The alerts of the bars from ``since``, once each, in the order of their bars. */
-  private alertsFrom(context: Context, since: number): RunnerAlert[] {
+  /** The alerts of the bars from ``since`` (those the rule reads, when it says which), once each, in the order of their bars. */
+  private alertsFrom(context: Context, since: number, reads: Reads | null = null): RunnerAlert[] {
     const seen = new Set<string>()
     const found: RunnerAlert[] = []
     const raised = context.alerts ?? []
@@ -664,6 +812,7 @@ export class Runner {
     for (let index = raised.length - 1; index >= 0; index -= 1) {
       const alert = raised[index]
       if (alert.time < since) break
+      if (reads !== null && !readsAlert(reads, alert)) continue
       const entry = { type: alert.type, id: alert.id, ...alertParts(alert), time: alert.time }
       // Once each: a call PineTS evaluates twice on a bar must not make two signals.
       const key = JSON.stringify([entry.time, entry.id, entry.title, entry.message])
@@ -675,13 +824,15 @@ export class Runner {
   }
 
   private result(loaded: Loaded, context: Context, since: number, plotTimes: Set<number>, started: number): RunResult {
-    const alerts = this.alertsFrom(context, since)
-    const times = new Set([...plotTimes, ...alerts.map((alert) => alert.time)])
+    const reads = loaded.reads
+    const alerts = this.alertsFrom(context, since, reads)
+    // A rule that says what it reads is given plots only at the bars of its alerts, where it reads them, or none.
+    const times = reads ? new Set(alerts.map((alert) => alert.time)) : new Set([...plotTimes, ...alerts.map((alert) => alert.time)])
     return {
       bars: loaded.candles.length,
       milliseconds: Math.round(performance.now() - started),
       alerts,
-      plots: plotValuesAt(context.plots as Record<string, PlotLike>, times),
+      plots: reads && !reads.plots ? {} : plotValuesAt(context.plots as Record<string, PlotLike>, times),
     }
   }
 

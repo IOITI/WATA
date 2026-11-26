@@ -6,8 +6,11 @@ import { runInNewContext } from 'node:vm'
 import { describe, expect, it, vi } from 'vitest'
 
 import type { SeriesAsk } from './provider'
-import { codeOf, detailOf, differencesOf, HELD_HEAP_SHARE, MAX_RUNTIME_WARNINGS, plotValuesAt, Runner, wholeBecause } from './runnerCore'
-import type { BarRow, HeapMeasure, PinnedLibrary, RunnerResponse } from './runnerCore'
+import {
+  checkedReads, codeOf, detailOf, differencesOf, HELD_HEAP_SHARE, keepOnlyRead, MAX_RUNTIME_WARNINGS, plotValuesAt, readsAlert, Runner,
+  variablesOver, wholeBecause,
+} from './runnerCore'
+import type { BarRow, HeapMeasure, PinnedLibrary, Reads, RunnerAlert, RunnerResponse } from './runnerCore'
 
 // PineTS as it is, counting the indicators made: each one is a compile of a script.
 const made = vi.hoisted(() => ({ indicators: 0 }))
@@ -601,5 +604,202 @@ describe('the plots at some bars', () => {
 
     expect(plotValuesAt(plots, new Set([2, 3]))).toEqual({ Mid: { 2: null, 3: 30 } })
     expect(plotValuesAt(plots, new Set())).toEqual({})
+  })
+})
+
+// What a rule reads of its script's runs: the alerts it maps, and a plot only if it reads one.
+describe('a rule that says what it reads', () => {
+  const UP_ONLY: Reads = { alerts: ['Up'], alert_calls: false, plots: false }
+  const alertsOf = (response: RunnerResponse): RunnerAlert[] => (ok(response) as unknown as { alerts: RunnerAlert[] }).alerts
+  const plotsOf = (response: RunnerResponse) => (ok(response) as unknown as { plots: Record<string, Record<string, unknown>> }).plots
+  /** What the run a rule holds kept: its alerts as PineTS raised them, the points of its plots, its variables. */
+  function kept(target: Runner, rule: string) {
+    const context = heldContext(target, rule) as unknown as {
+      alerts: { type: string; title?: string }[]
+      plots: Record<string, { data?: unknown[] }>
+      var: Record<string, { data: unknown[] }>
+    }
+    const points = Object.entries(context.plots ?? {}).filter(([key]) => !key.startsWith('__')).reduce((sum, [, plot]) => sum + (plot.data?.length ?? 0), 0)
+    return { context, points }
+  }
+
+  it('is answered those alerts alone, and no plot it does not read', async () => {
+    const all = tenMinuteBars(220)
+    const everything = await loadMany(runner(), 'r1', all)
+    const read = await loadMany(runner(), 'r1', all, { reads: UP_ONLY })
+
+    const ups = alertsOf(everything).filter((alert) => alert.type === 'alertcondition' && alert.title === 'Up')
+    expect(ups.length).toBeGreaterThan(2)
+    expect(alertsOf(everything).length).toBeGreaterThan(ups.length)
+    // The same alerts as a run that keeps everything raises under that title, at the same bars.
+    expect(alertsOf(read)).toEqual(ups)
+    expect(plotsOf(read)).toEqual({})
+    expect(Object.keys(plotsOf(everything)).length).toBeGreaterThan(5)
+  })
+
+  it('reads every alertcondition when it names none, and alert() calls when it says so', async () => {
+    const all = tenMinuteBars(220)
+    const everything = alertsOf(await loadMany(runner(), 'r1', all))
+    const conditions = await loadMany(runner(), 'r1', all, { reads: { alerts: null, alert_calls: false, plots: false } })
+    const calls = await loadMany(runner(), 'r1', all, { reads: { alerts: [], alert_calls: true, plots: false } })
+
+    expect(everything.some((alert) => alert.type === 'alert')).toBe(true)
+    expect(alertsOf(conditions)).toEqual(everything.filter((alert) => alert.type === 'alertcondition'))
+    expect(alertsOf(calls)).toEqual(everything.filter((alert) => alert.type === 'alert'))
+  })
+
+  it('is given its plots at the bars of its alerts when it reads one', async () => {
+    const all = tenMinuteBars(220)
+    const everything = await loadMany(runner(), 'r1', all)
+    const read = await loadMany(runner(), 'r1', all, { reads: { ...UP_ONLY, plots: true } })
+
+    const bars = new Set(alertsOf(read).map((alert) => String(alert.time)))
+    expect(Object.keys(plotsOf(read))).toEqual(Object.keys(plotsOf(everything)))
+    for (const [title, values] of Object.entries(plotsOf(read))) {
+      expect(new Set(Object.keys(values))).toEqual(bars)
+      // Each as a run that keeps everything has it at that bar.
+      for (const [time, value] of Object.entries(values)) expect(value).toBe(plotsOf(everything)[title][time])
+    }
+  })
+
+  it('has PineTS keep no point of a plot nobody reads, and no alert the rule ignores', async () => {
+    const all = tenMinuteBars(220)
+    const full = runner()
+    const lean = runner()
+    ok(await loadMany(full, 'r1', all, { continued: true }))
+    ok(await loadMany(lean, 'r1', all, { continued: true, reads: UP_ONLY }))
+
+    expect(kept(full, 'r1').points).toBeGreaterThan(220 * 5)
+    expect(kept(full, 'r1').context.alerts.some((alert) => alert.title === 'Down')).toBe(true)
+    expect(kept(lean, 'r1').points).toBe(0)
+    expect(kept(lean, 'r1').context.alerts.length).toBeGreaterThan(2)
+    expect(kept(lean, 'r1').context.alerts.every((alert) => alert.type === 'alertcondition' && alert.title === 'Up')).toBe(true)
+  })
+
+  // A whole run at each of the new bars of the runners it is compared with: some seconds.
+  it('raises at each new bar what a run that keeps everything raises, continued or whole', { timeout: 30_000 }, async () => {
+    const all = tenMinuteBars(200)
+    const continuing = runner()
+    const whole = runner()
+    const everything = runner()
+    ok(await loadMany(continuing, 'r1', all.slice(0, 120), { continued: true, reads: UP_ONLY }))
+    ok(await loadMany(whole, 'r1', all.slice(0, 120), { reads: UP_ONLY }))
+    ok(await loadMany(everything, 'r1', all.slice(0, 120)))
+
+    let raised = 0
+    for (const [from, to] of [...Array.from({ length: 60 }, (_, index) => [120 + index, 121 + index]), [180, 185], [185, 200]]) {
+      const request = { id: from, op: 'append' as const, rule: 'r1', bars: all.slice(from, to) }
+      const expected = alertsOf(await everything.handle(request)).filter((alert) => alert.title === 'Up')
+      const continued = await continuing.handle(request)
+      expect(continued).toMatchObject({ continued: true, whole: null })
+      expect(alertsOf(continued)).toEqual(expected)
+      expect(alertsOf(await whole.handle(request))).toEqual(expected)
+      expect(plotsOf(continued)).toEqual({})
+      raised += expected.length
+    }
+    expect(raised).toBeGreaterThan(0)
+  })
+
+  it('has its continued run checked on the script\'s own variables, at each bar since the last check', async () => {
+    const all = tenMinuteBars(260)
+    const target = runner()
+    ok(await loadMany(target, 'r1', all.slice(0, 200), { continued: true, reads: UP_ONLY }))
+    for (let index = 200; index < 230; index += 1) ok(await target.handle({ id: index, op: 'append', rule: 'r1', bars: [all[index]] }))
+
+    const checked = ok(await target.handle({ id: 3, op: 'check', rule: 'r1' }))
+    ok(await target.handle({ id: 5, op: 'append', rule: 'r1', bars: all.slice(230, 250) }))
+    // As a PineTS that went on wrongly would have it: a variable of the script no whole run has at that value.
+    const { context } = kept(target, 'r1')
+    const peak = Object.keys(context.var).find((name) => name.endsWith('peak')) as string
+    const values = context.var[peak].data
+    values[values.length - 6] = 1
+    const differing = ok(await target.handle({ id: 6, op: 'check', rule: 'r1' }))
+
+    expect(checked).toMatchObject({ op: 'check', compared: 30, same: true, differences: [], continued: true })
+    expect(differing).toMatchObject({ same: false, compared: 20, continued: false })
+    if (differing.op !== 'check') return
+    // The fifth bar from the last: the last value of all is the one carried to the next bar.
+    const at = new Date(all[245][0]).toISOString().replace('.000Z', 'Z')
+    expect(differing.differences[0]).toMatch(new RegExp(`^variable "var ${peak}" at ${at}: 1 continued, [0-9.]+ whole$`))
+    expect(target.continuing()).toEqual([])
+  })
+
+  it('is not asked of a study, which reads everything', async () => {
+    const all = tenMinuteBars(120)
+    const studied = await loadMany(runner(), 'r1', all, { detail: true, reads: UP_ONLY })
+
+    expect(alertsOf(studied).some((alert) => alert.title === 'Down')).toBe(true)
+    expect(Object.keys(plotsOf(studied)).length).toBeGreaterThan(5)
+  })
+
+  it('is taken as said only when it is what it should be', () => {
+    expect(checkedReads({ alerts: ['Up'], alert_calls: false, plots: true })).toEqual({ alerts: ['Up'], alert_calls: false, plots: true })
+    expect(checkedReads({ alerts: null, alert_calls: true, plots: false })).toEqual({ alerts: null, alert_calls: true, plots: false })
+    for (const wrong of [undefined, null, 'all', {}, { alerts: 'Up', alert_calls: false, plots: false }, { alerts: [1], alert_calls: false, plots: false },
+      { alerts: [], alert_calls: 'no', plots: false }, { alerts: [], alert_calls: false }]) {
+      expect(checkedReads(wrong)).toBeNull()
+    }
+  })
+
+  it('knows an alert it reads by its title, as PineTS hands it over', () => {
+    expect(readsAlert(UP_ONLY, { type: 'alertcondition', title: 'Up', message: '' })).toBe(true)
+    expect(readsAlert(UP_ONLY, { type: 'alertcondition', title: 'Down', message: '' })).toBe(false)
+    expect(readsAlert(UP_ONLY, { type: 'alertcondition', message: '' })).toBe(false)
+    // PineTS 0.11.1 and 0.12.0 hand the named arguments over in place of the title.
+    expect(readsAlert(UP_ONLY, { type: 'alertcondition', title: { title: 'Up', message: 'm' }, message: '' })).toBe(true)
+    expect(readsAlert(UP_ONLY, { type: 'alert', message: 'anything' })).toBe(false)
+    expect(readsAlert({ ...UP_ONLY, alert_calls: true }, { type: 'alert', message: 'anything' })).toBe(true)
+    expect(readsAlert({ ...UP_ONLY, alerts: null }, { type: 'alertcondition', message: '' })).toBe(true)
+  })
+
+  it('keeps only what is read of a run\'s context, and leaves the rest of it alone', () => {
+    const draw = () => 'drawn'
+    const context = {
+      pine: { plot: { any: draw, style_line: 'style_line' }, plotshape: draw, bgcolor: draw, fill: { any: draw }, hline: { any: draw }, ta: { sma: draw } },
+      alerts: [] as { type: string; title?: string }[],
+    }
+    keepOnlyRead(context, UP_ONLY)
+
+    expect([context.pine.plot.any(), context.pine.plotshape(), context.pine.bgcolor(), context.pine.fill.any(), context.pine.hline.any()]).toEqual([null, null, null, null, null])
+    expect(context.pine.plot.style_line).toBe('style_line')
+    expect(context.pine.ta.sma()).toBe('drawn')
+    expect(context.alerts.push({ type: 'alertcondition', title: 'Down' }, { type: 'alertcondition', title: 'Up' }, { type: 'alert' })).toBe(1)
+    expect(context.alerts).toEqual([{ type: 'alertcondition', title: 'Up' }])
+    expect(JSON.stringify(context.alerts)).toBe('[{"type":"alertcondition","title":"Up"}]')
+
+    const drawing = { pine: { plot: { any: draw }, plotshape: draw }, alerts: [] }
+    keepOnlyRead(drawing, { ...UP_ONLY, plots: true })
+    expect([drawing.pine.plot.any(), drawing.pine.plotshape()]).toEqual(['drawn', 'drawn'])
+  })
+
+  it('reads a script\'s variables at their last values, what is no number, text or boolean left out', () => {
+    const context = {
+      var: { peak: { data: [1, 2, NaN, 4] }, crosses: { data: [[1], [1, 2]] } },
+      let: { up: { data: [false, true] }, name: { data: ['a', 'b', 'c'] } },
+      const: { length: { data: [14, 14, 14] }, odd: { data: 'not a series' } },
+      params: { p0: { data: [9, 9] } },
+    }
+
+    expect(variablesOver(context, 3)).toEqual({
+      'var peak': [2, null, 4], 'var crosses': [undefined, undefined], 'let up': [false, true], 'let name': ['a', 'b', 'c'], 'const length': [14, 14, 14],
+    })
+    expect(variablesOver(context, 0)).toEqual({})
+    expect(variablesOver(null, 3)).toEqual({})
+  })
+
+  it('says which variable differs and at which bar, the first bars first', () => {
+    const times = [T0, T0 + MINUTE, T0 + 2 * MINUTE]
+    const at = (time: number) => new Date(time).toISOString().replace('.000Z', 'Z')
+    const side = (variables: Record<string, (number | string | boolean | null | undefined)[]>) => ({ alerts: [], plots: {}, variables, times })
+
+    expect(differencesOf(side({ 'var a': [1, 2, 3, 3], 'let b': [null, true] }), side({ 'var a': [1, 2, 3, 3], 'let b': [null, true] }))).toEqual([])
+    // An object is never compared; a value PineTS carries to the next bar is said at the last bar.
+    expect(differencesOf(side({ 'var a': [undefined, 2, 3, 3] }), side({ 'var a': [undefined, 2, 3, 4] }))).toEqual([
+      `variable "var a" at ${at(times[2])}: 3 continued, 4 whole`,
+    ])
+    expect(differencesOf(side({ 'var a': [1, 2, 9, 3], 'var c': [5] }), side({ 'var a': [1, 7, 9, 3] }))).toEqual([
+      `variable "var a" at ${at(times[1])}: 2 continued, 7 whole`,
+      `variable "var c" only in the continued run`,
+    ])
   })
 })

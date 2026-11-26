@@ -68,6 +68,8 @@ async def pine_signals(
     session = ReplaySession(
         rule, engine_rule, rows, node=node, history_days=settings.history_days,
         restart_minute=restart_minute_of(settings.restart_time), command=command, cache=cache, on_window=on_window,
+        # Only what the rule reads of each run is kept and answered: a script's other alerts and its plots are not.
+        lean=True,
     )
     result = PineResult()
     number = first_id

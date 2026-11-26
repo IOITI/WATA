@@ -176,6 +176,26 @@ def interpret(rule: dict, alert: dict, *, bar: list, ticker: str, timeframe: str
     return Candidate(key, title, filled, action, confidence, "; ".join(notes) or None)
 
 
+def reads_of(rule: dict, sources=(), *, every_alert: bool = False) -> dict:
+    """
+    What a rule reads of its script's runs, sent to the runner with each load so that it keeps and answers
+    that alone (runnerCore.ts): a script may raise an alert at every bar and draw twenty plots, of which a
+    rule reads five alerts and nothing else.
+
+    - ``alerts``: the titles of the alertconditions the rule maps to something; None for every one
+      (``every_alert``: a replay that reads each alert as a message);
+    - ``alert_calls``: whether it reads the script's alert() calls;
+    - ``plots``: whether it reads a plot at all: its confidence plot, or one an alert's message may name
+      (``{{plot_0}}``, ``{{plot("RSI")}}``), looked for in ``sources`` (the script and its libraries,
+      comments included: kept in doubt). Reading one keeps them all, their order being what ``{{plot_0}}`` counts.
+    """
+    return {
+        "alerts": None if every_alert else sorted({entry["title"] for entry in rule["alerts"] if entry["action"] != IGNORE}),
+        "alert_calls": every_alert or rule["alert_calls"] != IGNORE,
+        "plots": bool(rule.get("confidence_plot")) or any("{{plot" in source for source in sources),
+    }
+
+
 def payload(rule: dict, candidate: Candidate, *, bar_closed_at: float, now: float) -> dict:
     """What is sent to the web server, checked against the webhook's schema."""
     body = {

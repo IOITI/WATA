@@ -2028,3 +2028,62 @@ def test_a_tick_begins_within_hundredths_of_a_second_of_the_feed_s_row():
     assert CLOSE_AFTER_SECONDS < engine_module.EARLIEST_SECONDS <= 0.05
     assert engine_module.ASK_EVERY_SECONDS <= 0.02 < engine_module.ASK_OFTEN_FOR_SECONDS
     assert engine_module.SETTLE_SECONDS == 1.5
+
+
+# ── what the runner is asked to keep and answer ──
+
+def test_the_engine_tells_the_runner_what_each_rule_reads_of_its_runs(scripts):
+    engine, rule, clock, source, runner, journal, sender, _ = engine_with(scripts)
+    reading = make_rule(scripts, name="Reads its confidence", confidence_plot="Confidence", alert_calls="message",
+                        alerts=[{"title": "Up", "action": "long"}, {"title": "Down", "action": "ignore"}])
+
+    run(engine.tick())
+
+    reads = {request["rule"]: request["reads"] for request in runner.requests if request["op"] == "load"}
+    # The alerts it maps to something (a message is read too), and no plot: it names none.
+    assert reads[rule["id"]] == {"alerts": ["Down", "Up"], "alert_calls": False, "plots": False}
+    assert reads[reading["id"]] == {"alerts": ["Up"], "alert_calls": True, "plots": True}
+
+
+@pytest.mark.skipif(not os.path.isfile(RUNNER) or _node_major() < 22, reason="the runner is not built, or no Node 22+ is here")
+def test_the_built_runner_raises_for_a_rule_that_says_what_it_reads_what_it_raises_for_one_that_reads_everything():
+    rows = ten_second_rows(T0 - 8 * 3600, 8 * 360)
+    bars = TimeBars(60, "bid").add(rows, T0)
+    sha = hashlib.sha256(SCRIPT.encode()).hexdigest()
+    reads = {"alerts": ["Up"], "alert_calls": False, "plots": False}
+
+    async def answer(ask):
+        return []
+
+    def load(rule, **more):
+        return {"op": "load", "rule": rule, "script": {"source": SCRIPT, "sha256": sha}, "libraries": [],
+                "inputs": {"in_0": 8}, "ticker": "CAPITAL_US100", "timeframe": "1", "bars": bars[:-60], **more}
+
+    async def scenario():
+        runner = NodeRunner(runner_command(find_node("node"), RUNNER, 256), answer, timeout_seconds=30)
+        await runner.start()
+        try:
+            everything = await runner.request(load("0123456789ab"))
+            lean = await runner.request(load("0123456789ac", reads=reads))
+            held = await runner.request(load("0123456789ad", reads=reads, continued=True))
+            added = []
+            for bar in bars[-60:]:
+                full = await runner.request({"op": "append", "rule": "0123456789ab", "bars": [bar]})
+                continued = await runner.request({"op": "append", "rule": "0123456789ad", "bars": [bar]})
+                added.append((full, continued))
+            return everything, lean, held, added, await runner.request({"op": "check", "rule": "0123456789ad"})
+        finally:
+            await runner.stop()
+
+    everything, lean, held, added, checked = run(scenario())
+
+    ups = [alert for alert in everything["alerts"] if alert["title"] == "Up"]
+    assert ups and len(everything["alerts"]) > len(ups)
+    # The alerts it reads, at the bars a run that keeps everything raises them at, and no plot: it reads none.
+    assert lean["alerts"] == ups and lean["plots"] == {}
+    assert everything["plots"]["Fast"] and held["continued"] is True
+    for full, continued in added:
+        assert continued["alerts"] == [alert for alert in full["alerts"] if alert["title"] == "Up"]
+        assert continued["plots"] == {} and continued["continued"] is True
+    # Its continued run, which keeps no plot, is compared with a whole run on the script's own variables.
+    assert checked["same"] is True and checked["compared"] == 60 and checked["differences"] == []
