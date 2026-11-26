@@ -14,7 +14,8 @@ import pytz
 
 from src.admin import downloads, service_restart
 from src.release import guards
-from src.release.guards import Situation, deploy_refusal, market_is_open, refusal, scheduler_job_near
+from src.release.guards import Situation, deploy_refusal, market_days, market_is_open, may_trade, refusal, scheduler_job_near
+from src.trade.market_calendar import CLOSED, EARLY_CLOSE, read_market_calendar
 
 RELEASE = pathlib.Path("src/release")
 # What the server's python3 runs: guards, plan, manifest, host, cli (check.py runs in the image).
@@ -23,7 +24,7 @@ HOST_MODULES = ("guards.py", "plan.py", "manifest.py", "host.py", "cli.py", "__i
 
 def test_the_admin_reads_the_same_rules_it_always_imported():
     for name in ("ORDER", "TRADING_PATH", "SCHEDULER_JOB_MARGIN_SECONDS", "Situation", "refusal", "ordered",
-                 "moment", "scheduler_job_near", "scheduler_jobs", "market_is_open"):
+                 "moment", "scheduler_job_near", "scheduler_jobs", "market_is_open", "may_trade"):
         assert getattr(service_restart, name) is getattr(guards, name), name
     for name in ("market_is_open", "trading_hours", "trading_timezone", "within_hours"):
         assert getattr(downloads, name) is getattr(guards, name), name
@@ -102,6 +103,111 @@ def _imports(path: pathlib.Path) -> set[str]:
         elif isinstance(node, ast.ImportFrom) and not node.level:
             found.add(node.module)
     return found
+
+
+# ── the days nothing is traded: a restart and a deploy need no forcing ──
+
+def _hours(closed=(), timezone_name="America/New_York") -> dict:
+    """WATA's hours as the server has them: 02:00 to 16:00 in New York, days counted in Paris."""
+    hours = {"trading_start_hour": 2, "trading_end_hour": 16}
+    if timezone_name:
+        hours["timezone"] = timezone_name
+    rules = [{"rule_type": "market_hours", "rule_config": hours}]
+    if closed:
+        rules.append({"rule_type": "market_closed_dates", "rule_config": {"market_closed_dates": list(closed)}})
+    return {"trade": {"config": {"general": {"timezone": "Europe/Paris"}}, "rules": rules}}
+
+
+def _at(text: str, zone: str = "America/New_York") -> float:
+    return pytz.timezone(zone).localize(datetime.fromisoformat(text)).timestamp()
+
+
+def test_a_us_holiday_is_no_open_market_for_a_restart_or_a_deploy():
+    config = _hours()
+    thanksgiving = _at("2026-11-26T08:00")
+    # By its hours alone, a Thursday at 08:00 in New York is an open market: what waits for the close goes on waiting.
+    assert market_is_open(config, thanksgiving) is True
+    assert may_trade(config, thanksgiving) is False
+    # An ordinary Tuesday in its hours, after them, and a Saturday.
+    assert may_trade(config, _at("2026-11-24T08:00")) is True
+    assert may_trade(config, _at("2026-11-24T16:00")) is False
+    assert may_trade(config, _at("2026-11-28T08:00")) is False
+
+
+def test_a_day_that_closes_early_is_traded_until_its_close():
+    config = _hours()
+    # The day after Thanksgiving closes at 13:00 in New York.
+    assert may_trade(config, _at("2026-11-27T12:59")) is True
+    assert may_trade(config, _at("2026-11-27T13:00")) is False
+    assert market_is_open(config, _at("2026-11-27T13:00")) is True
+    # Hours written in Paris: the close is still New York's (13:00 there is 19:00 in Paris).
+    paris = {"trade": {"config": {"general": {"timezone": "Europe/Paris"}}, "rules": [
+        {"rule_type": "market_hours", "rule_config": {"trading_start_hour": 8, "trading_end_hour": 22}}]}}
+    assert may_trade(paris, _at("2026-11-27T18:59", "Europe/Paris")) is True
+    assert may_trade(paris, _at("2026-11-27T19:00", "Europe/Paris")) is False
+
+
+def test_the_configurations_closed_dates_are_read_as_the_trader_reads_them():
+    config = _hours(closed=["24/11/2026"])
+    assert may_trade(config, _at("2026-11-24T08:00")) is False
+    assert may_trade(config, _at("2026-11-25T08:00")) is True
+    # The day is the one of the market's hours: 02:30 in New York on the 24th is still that closed day.
+    assert may_trade(config, _at("2026-11-24T02:30")) is False
+    # A list that is no list is no closed date.
+    odd = _hours()
+    odd["trade"]["rules"].append({"rule_type": "market_closed_dates", "rule_config": {"market_closed_dates": "24/11/2026"}})
+    assert may_trade(odd, _at("2026-11-24T08:00")) is True
+
+
+def test_a_calendar_that_cannot_be_read_leaves_the_hours_alone(tmp_path):
+    config = _hours()
+    thanksgiving = _at("2026-11-26T08:00")
+    assert market_days(str(tmp_path / "absent.csv")) == {}
+    assert may_trade(config, thanksgiving, days={}) is True
+    other = tmp_path / "other.csv"
+    other.write_text("day;what\n2026-11-26;closed\n")
+    assert market_days(str(other)) == {}
+    # An early close whose time cannot be read counts as open, and so does an unknown zone.
+    assert may_trade(config, _at("2026-11-27T15:00"), days={"2026-11-27": (EARLY_CLOSE, "soon")}) is True
+    assert may_trade(_hours(timezone_name="Mars/Olympus"), thanksgiving) is True
+    assert may_trade({}, thanksgiving) is True
+
+
+def _as_the_trader_reads_it(config: dict, calendar, now: float) -> bool:
+    """The same answer from the trader's own calendar (src/trade/market_calendar.py, pytz)."""
+    zone, start, end = guards.trading_hours(config)
+    local = datetime.fromtimestamp(now, pytz.timezone(zone))
+    if not (local.weekday() < 5 and start <= local.hour < end):
+        return False
+    if local.strftime("%d/%m/%Y") in guards.closed_dates(config) or calendar.closed_on(local.date()) is not None:
+        return False
+    early = calendar.early_close_on(local.date())
+    return early is None or now < early.close_moment()
+
+
+def test_the_guards_read_the_calendar_the_trader_reads():
+    calendar = read_market_calendar()
+    days = market_days()
+    assert (guards.CLOSED, guards.EARLY_CLOSE) == (CLOSED, EARLY_CLOSE)
+    assert days and set(days) == {day.isoformat() for day in calendar.by_day}
+    for day, entry in calendar.by_day.items():
+        assert days[day.isoformat()] == (entry.kind, entry.close_new_york or ""), day
+    assert days["2026-11-26"] == (CLOSED, "") and days["2026-11-27"] == (EARLY_CLOSE, "13:00")
+
+
+@pytest.mark.parametrize("first", ["2026-11-22", "2026-12-22", "2026-07-01", "2026-03-27"])
+def test_a_week_with_a_holiday_is_judged_as_the_trader_judges_it(first):
+    calendar = read_market_calendar()
+    config = _hours(closed=["23/12/2026"])
+    start = datetime.fromisoformat(first).replace(tzinfo=timezone.utc)
+    answers = set()
+    for minutes in range(0, 8 * 24 * 60, 7):
+        now = (start + timedelta(minutes=minutes)).timestamp()
+        said = may_trade(config, now)
+        assert said == _as_the_trader_reads_it(config, calendar, now), (first, minutes)
+        answers.add((said, market_is_open(config, now)))
+    # Each week holds a moment in WATA's hours that is no trading moment, and none the other way round.
+    assert (False, True) in answers and (True, False) not in answers
 
 
 @pytest.mark.parametrize("name", HOST_MODULES)

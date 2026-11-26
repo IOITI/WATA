@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.104.1 - A US holiday is no open market for a deploy or a restart
+
+**Release date:** 2026-11-26
+
+On Thanksgiving 2026 a deploy of eight containers was held back whole, "the market is open by WATA's hours", with no position open and every entry refused for the day: the guards read the hours of a weekday and nothing else, and the deploy had to be forced.
+
+- **A restart and a deploy read the days nothing is traded** (`may_trade` in `src/release/guards.py`): WATA's hours on a weekday as before, less the configuration's closed dates and the US market's holidays, and less what follows the close of a day the US market closes early (13:00 in New York the day after Thanksgiving). On those days the trading path, the TA engine with a live rule and the two recorders go without being forced, from the server (`watadeploy`) and from the System page alike. A position open still holds the trading path back, holiday or not.
+- **The calendar is the trader's own file**, read again with the standard library: the server's python3 runs the deploy with nothing WATA installs, and the trader's reader needs pytz. Tests hold the two readers to the same days, and the guards' answer to the trader's, minute by minute, over four weeks that hold a holiday.
+- A calendar that cannot be read changes nothing: the hours alone decide, as before.
+- What waits for the day's close (paper days, nightly runs, the debrief, the downloads, the research export) still reads the hours alone.
+- Changes the admin alone; the server's `watadeploy` reads the new rule from the release once installed. No backtest turns stale.
+
 ## v0.104.0 - A script's runs keep only what its rule reads
 
 **Release date:** 2026-11-26

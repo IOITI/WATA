@@ -84,7 +84,7 @@ DYNAMIC = {
 # runner/, checker/ and static/ are built by package.sh: they are in the image, not in git.
 DATA = {
     "src/trade/data/macro_calendar.csv": ("src.trade.macro_calendar",),
-    "src/trade/data/us_market_calendar.csv": ("src.trade.market_calendar",),
+    "src/trade/data/us_market_calendar.csv": ("src.trade.market_calendar", "src.release.guards"),
     "src/ta_engine/runner": ("src.ta_engine.runner",),
     "src/ta_engine/checker": ("src.research.study",),
     "src/admin/static": ("src.admin.app",),

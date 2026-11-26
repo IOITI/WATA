@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 
 from src.heartbeat import HEARTBEAT_STALE_SECONDS
 from src.release import manifest as manifests
-from src.release.guards import ORDER, Situation, deploy_refusal, market_is_open, moment, scheduler_job_near
+from src.release.guards import ORDER, Situation, deploy_refusal, may_trade, moment, scheduler_job_near
 from src.release.plan import BACKUP, CHANGE, INFRA, NOW, OPTIONAL, WATA, Container, Step, make_plan, said, summary
 
 BASE = "/app/wata"
@@ -639,7 +639,7 @@ class Host:
             positions_open=self._count_open_positions(),
             positions_listed=listed,
             close_intents=intents,
-            market_open=market_is_open(config, now) if config else True,
+            market_open=may_trade(config, now) if config else True,
             live_rules=self._live_rules(config),
             backtests_running=backtests,
             study_running=studies > 0,

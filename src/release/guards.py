@@ -8,6 +8,8 @@ Standard library only: the server's python3 imports it from a release's
 folder, beside nothing WATA installs.
 """
 
+import csv
+import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -23,6 +25,12 @@ ORDER = (
 # the TA engine's live rules ride on the Capital.com feed's (the operator's choice, 2026-10-29). A restart from
 # the admin keeps its own rule and lets them go.
 RECORDERS = frozenset({"price_recorder", "capital_feed"})
+# The US market's holidays and early closes, the trader's own file (src/trade/market_calendar.py reads it with
+# pytz, which the server's python3 does not have): read here again, with the standard library.
+CALENDAR_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "trade", "data", "us_market_calendar.csv")
+NEW_YORK = "America/New_York"
+CLOSED = "closed"
+EARLY_CLOSE = "early_close"
 # How long a scheduled job keeps the scheduler from being restarted, before and after it: its
 # schedule is worked out when it starts, so a restart just past a job misses that day's.
 SCHEDULER_JOB_MARGIN_SECONDS = 120
@@ -150,16 +158,74 @@ def within_hours(hours: tuple[str, int, int], now: float) -> bool:
 
 def market_is_open(config: dict, now: float) -> bool:
     """
-    Whether WATA may be trading at ``now``, as the deploy judges it: its hours
-    (``market_hours``, in their timezone) on a weekday. Unknown counts as open.
-    The downloads, the research export, the paper days and the restarts of the
-    trading path wait for it to be closed.
+    Whether ``now`` is in WATA's hours (``market_hours``, in their timezone)
+    on a weekday. Unknown counts as open. The downloads, the research export
+    and the paper days wait for it to be closed; a restart and a deploy read
+    ``may_trade``, which also knows the days nothing is traded.
     """
     try:
         return within_hours(trading_hours(config), now)
     except (ValueError, KeyError, TypeError):
         # An unknown zone is a KeyError (ZoneInfoNotFoundError), a malformed one a ValueError.
         return True
+
+
+def market_days(path: str = CALENDAR_PATH) -> dict[str, tuple[str, str]]:
+    """
+    The days the US market is closed or closes early, by day:
+    ``{"2026-11-26": ("closed", ""), "2026-11-27": ("early_close", "13:00")}``,
+    New York's hours. A file that cannot be read gives none: the hours alone
+    then say whether the market is open, as before the calendar was read here.
+    """
+    try:
+        with open(path, encoding="utf-8") as in_file:
+            rows = csv.DictReader(line for line in in_file if line.strip() and not line.startswith("#"))
+            return {row["date"]: (row["kind"], row.get("close_new_york") or "") for row in rows}
+    except (OSError, KeyError, ValueError, csv.Error):
+        return {}
+
+
+def closed_dates(config: dict) -> frozenset[str]:
+    """The configuration's own closed dates (``market_closed_dates``), DD/MM/YYYY as the trader reads them."""
+    dates = rule_config(config, "market_closed_dates").get("market_closed_dates")
+    return frozenset(str(entry) for entry in dates) if isinstance(dates, (list, tuple)) else frozenset()
+
+
+def may_trade(config: dict, now: float, days: "dict[str, tuple[str, str]] | None" = None) -> bool:
+    """
+    Whether WATA may take or hold a trade at ``now``, as a restart and a deploy
+    judge it: its hours on a weekday (``market_is_open``), less the days the
+    trader takes no entry on, which are the configuration's closed dates and
+    the US market's holidays, read on the day of the market's hours as
+    ``TradingRule.check_market_hours`` reads them, and less what follows the
+    close of a day the US market closes early. On such days a restart needs
+    no forcing: a holiday is a Sunday with a weekday's name.
+
+    ``market_is_open`` itself stays the hours alone: what waits for the day's
+    close (paper days, nightly runs, the debrief, the downloads) has nothing
+    to do on a holiday that it would not do in the evening.
+
+    Unknown counts as open, and a calendar that cannot be read changes nothing.
+    """
+    if not market_is_open(config, now):
+        return False
+    try:
+        local = datetime.fromtimestamp(now, ZoneInfo(trading_hours(config)[0]))
+    except (ValueError, KeyError, TypeError):
+        return True
+    if local.strftime("%d/%m/%Y") in closed_dates(config):
+        return False
+    kind, close = (market_days() if days is None else days).get(local.date().isoformat(), ("", ""))
+    if kind == CLOSED:
+        return False
+    if kind == EARLY_CLOSE:
+        try:
+            hour, minute = (int(part) for part in close.split(":")[:2])
+            closes = datetime(local.year, local.month, local.day, hour, minute, tzinfo=ZoneInfo(NEW_YORK))
+        except (ValueError, KeyError, TypeError):
+            return True
+        return now < closes.timestamp()
+    return True
 
 
 def scheduler_jobs(config: dict) -> list[tuple[str, str, str]]:

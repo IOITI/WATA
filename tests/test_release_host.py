@@ -302,6 +302,27 @@ def test_a_change_of_the_trader_waits_for_the_close(server):
     assert {step.container: step.when for step in steps}["trader1"] == "now"
 
 
+def test_a_change_of_the_trader_goes_on_a_us_holiday_whatever_the_hour(server):
+    host, docker, clock, _ = server
+    change(docker, "src/trade/rules.py", "r2")
+    # Thanksgiving 2026 at 13:00 UTC: a Thursday at 08:00 in New York, in WATA's hours, and a day nothing is traded.
+    holiday = 1_795_698_000.0
+    clock.now = holiday
+    _, steps = host.plan()
+    when = {step.container: step.when for step in steps}
+    assert when["trader1"] == when["price_recorder1"] == when["admin1"] == when["ta_engine1"] == "now"
+    # The Tuesday before, the same hour: it waits for the close.
+    clock.now = holiday - 2 * 86400
+    _, steps = host.plan()
+    assert {step.container: step.when for step in steps}["trader1"] == "pending"
+    # A position is held back for, holiday or not.
+    clock.now = holiday
+    docker.positions = "1"
+    _, steps = host.plan()
+    trader = next(step for step in steps if step.container == "trader1")
+    assert trader.when == "pending" and "1 position open" in trader.held and "market" not in trader.held
+
+
 def test_what_cannot_be_read_holds_the_trading_path_back(server):
     host, docker, clock, _ = server
     change(docker, "src/trade/rules.py", "r2")
