@@ -465,6 +465,13 @@ class ConfigurationManager:
                 logger.error(error_msg)
                 raise ValueError(error_msg)
 
+            # A refused entry still sells the position held the other way (src/trade/refused_entry.py): on unless false
+            refused_entry = self.get_config_value("trade.config.position_management.close_on_refused_entry")
+            if refused_entry is not None and not isinstance(refused_entry, bool):
+                error_msg = "Config field 'trade.config.position_management.close_on_refused_entry' must be a boolean"
+                logger.error(error_msg)
+                raise ValueError(error_msg)
+
             # No turbo with a wider spread than this share of its ask is bought: no limit unless set
             max_spread = self.get_config_value("trade.config.turbo_preference.max_spread_percent")
             if max_spread is not None and (

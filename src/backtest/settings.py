@@ -23,6 +23,7 @@ from src.trade.fresh_quote import wait_for_fresh_quote
 from src.trade.funds_retry import MAX_PERCENT as MAX_FUNDS_RETRY_PERCENT, MAX_RETRIES as MAX_FUNDS_RETRIES, funds_retry
 from src.trade.index_estimate import followed_epic, index_between_quotes
 from src.trade.macro_calendar import NewsRule
+from src.trade.refused_entry import close_on_refused_entry
 
 _TIME_OF_DAY = re.compile(r"^([01][0-9]|2[0-3]):([0-5][0-9])$")
 
@@ -147,6 +148,10 @@ FIELDS = (
           source="trade.config.position_management.wait_for_fresh_quote"),
     Field("index_between_quotes", "exits", "boolean", "Exits judged on the index between the turbo's quotes",
           source="trade.config.position_management.index_between_quotes"),
+    # An entry the rules refuse still sells the positions held the other way (src/trade/refused_entry.py): off, the
+    # trader of before.
+    Field("close_on_refused_entry", "exits", "boolean", "A refused entry still sells the position held the other way",
+          source="trade.config.position_management.close_on_refused_entry"),
     # ── the turbo bought ──
     Field("turbo_min_price", "turbo", "number", "Turbos priced from", 0.01, 10_000,
           source="trade.config.turbo_preference.price_range.min"),
@@ -266,6 +271,10 @@ class BacktestSettings:
     # (src/trade/index_estimate.py), on the Capital.com instrument the position monitor follows (none: never).
     index_between_quotes: bool = False
     index_epic: str = ""
+    # An entry refused for WATA's own state (hours, pause, the day's limits...) sells the positions of the other
+    # direction, the signal itself standing (src/trade/refused_entry.py). Off for the runs made before it existed; a
+    # new run takes the live configuration's (on unless false).
+    close_on_refused_entry: bool = False
     # The turbo.
     turbo_min_price: float = 4
     turbo_max_price: float = 15
@@ -444,6 +453,7 @@ def from_config(config: dict, *, capital: float | None = None) -> BacktestSettin
         trailing_drawdown_percent=trailing.get("drawdown_percent", defaults.trailing_drawdown_percent),
         wait_for_fresh_quote=wait_for_fresh_quote(position_management),
         index_between_quotes=index_between_quotes(position_management),
+        close_on_refused_entry=close_on_refused_entry(position_management),
         index_epic=followed_epic(
             _section(config, "trade", "config", "capital_feed"),
             (_rule(config, "allowed_indices") or {}).get("indice_ids"),

@@ -796,3 +796,182 @@ def test_the_message_a_rehearsal_checks_is_one_the_trader_takes():
         dict(steps)["the message's form"]()
 
     assert [body["action"] for body in seen] == ["long", "close-position"] and seen[0]["indice"] == "us100"
+
+
+# ── an entry refused while a position is held the other way (src/trade/refused_entry.py) ──
+
+from src.trade.exceptions import TradingRuleViolation  # noqa: E402
+from src.trade.refused_entry import not_sold, said  # noqa: E402
+
+PAUSED = "Breaking trading rule: New entries are paused by the operator since 2026-11-27 10:00:00+00:00."
+SOLD_ONE = {**NOTHING_TO_CLOSE, "closed_initiated_count": 1, "closed_position_ids": ["p1"]}
+
+
+def _refused(refuse, *, action="short", held=("long",), close_result=SOLD_ONE, close_on_refused=True, confidence=None,
+             hand_over=None, flat=None, watch=None):
+    """A signal the rules refuse (``refuse`` sets the refusal on the mocks) while positions are held."""
+    calls, orchestrator, monitor, trading_rule, db_position_manager, telegram = _handler_dependencies(0)
+    monitor.close_managed_positions_by_criteria.return_value = close_result
+    db_position_manager.get_open_positions_ids_actions.return_value = [
+        {"position_id": f"p{number}", "action": direction} for number, direction in enumerate(held, start=1)
+    ]
+    refuse(trading_rule, monitor)
+    signal = _signal("uuid-1", action=action)
+    if confidence is not None:
+        signal["confidence"] = confidence
+    with patch.object(trader, "TelegramMessageComposer"), patch.object(trader, "journal_signal") as journal_signal:
+        asyncio.run(handle_trading_signal(
+            signal, orchestrator, monitor, trading_rule, db_position_manager, "exchange1", telegram,
+            hand_over=hand_over, flat_balance=flat, watch=watch, close_on_refused=close_on_refused,
+        ))
+    _, _, outcome, reason = journal_signal.call_args.args
+    assert journal_signal.call_count == 1 and outcome == trader.REFUSED
+    orchestrator.execute_trade_signal.assert_not_awaited()
+    return reason, calls, telegram
+
+
+def _paused(trading_rule, monitor):
+    trading_rule.check_entries_paused.side_effect = TradingRuleViolation(PAUSED)
+
+
+def _raising(check, text="Breaking trading rule: no entry now"):
+    def refuse(trading_rule, monitor):
+        getattr(trading_rule, check).side_effect = TradingRuleViolation(text)
+    return refuse
+
+
+def test_an_entry_refused_while_the_other_side_is_held_still_sells_it():
+    flat = _proven()
+
+    reason, calls, telegram = _refused(_paused, flat=flat)
+
+    # Only the other direction, as a close signal sells it, then no balance read before stands.
+    assert [call[0] for call in calls.mock_calls] == ["close", "invalidate_balance"]
+    assert calls.close.await_args.kwargs == {"action_filter": "long", "defer_bookkeeping": True}
+    assert not flat.usable(True)
+    assert reason == said(PAUSED, "long", 1) == f"{PAUSED[:-1]}; closed 1 long position(s) the signal turned against"
+    telegram.send.assert_awaited_once_with(f"SHORT refused: {reason}")
+
+
+@pytest.mark.parametrize("check", [
+    "check_market_hours", "check_macro_news", "check_entries_paused", "check_profit_per_day",
+    "check_cooldown_after_loss", "check_max_trades_per_day", "check_day_breakers",
+])
+def test_whatever_of_watas_own_state_refuses_the_entry_the_other_side_is_sold(check):
+    reason, calls, _ = _refused(_raising(check), action="long", held=("short",))
+
+    assert calls.close.await_args.kwargs == {"action_filter": "short", "defer_bookkeeping": True}
+    assert reason == "Breaking trading rule: no entry now; closed 1 short position(s) the signal turned against"
+
+
+def test_an_entry_refused_for_saxos_login_still_asks_for_the_sale():
+    watch = MagicMock()
+    watch.login_refusal.return_value = "Breaking trading rule: Saxo refuses to renew WATA's login since 20:05: ..."
+
+    reason, calls, _ = _refused(lambda trading_rule, monitor: None, watch=watch)
+
+    assert calls.close.await_args.kwargs["action_filter"] == "long"
+    assert reason == said(watch.login_refusal.return_value, "long", 1)
+
+
+def test_a_refused_entry_never_sells_a_position_of_its_own_direction():
+    # The pause is checked before the duplicate: a refused "Resume Short" while short must sell nothing.
+    reason, calls, telegram = _refused(_paused, action="short", held=("short",))
+
+    assert calls.mock_calls == [] and reason == PAUSED
+    telegram.send.assert_not_awaited()
+
+
+def test_a_refused_entry_with_nothing_held_stays_a_silent_refusal():
+    reason, calls, telegram = _refused(_paused, held=())
+
+    assert calls.mock_calls == [] and reason == PAUSED
+    telegram.send.assert_not_awaited()
+
+
+@pytest.mark.parametrize("check", ["check_signal_timestamp", "get_allowed_indice_id"])
+def test_a_signal_that_is_itself_turned_down_sells_nothing(check):
+    reason, calls, telegram = _refused(_raising(check, "Signal timestamp is too old"))
+
+    assert calls.mock_calls == [] and reason == "Signal timestamp is too old"
+    telegram.send.assert_not_awaited()
+
+
+def test_a_signal_under_the_confidence_wanted_sells_nothing_though_the_pause_refused_it_first():
+    def refuse(trading_rule, monitor):
+        _paused(trading_rule, monitor)
+        trading_rule.check_confidence_threshold.side_effect = TradingRuleViolation("Signal confidence (0.10) is below ...")
+
+    reason, calls, _ = _refused(refuse, confidence=0.1)
+
+    assert calls.mock_calls == [] and reason == PAUSED
+
+
+def test_without_the_setting_a_refused_entry_closes_nothing_as_before():
+    reason, calls, telegram = _refused(_paused, close_on_refused=False)
+
+    assert calls.mock_calls == [] and reason == PAUSED
+    telegram.send.assert_not_awaited()
+
+
+def test_what_the_refused_entrys_sale_could_not_sell_is_handed_to_the_position_monitor_and_said():
+    unsold = {**NOTHING_TO_CLOSE, "errors_count": 1, "not_closed": [
+        {"position_id": "p1", "reason": "Explicit Close (long)", "why": "Saxo says it cannot be closed now"},
+    ]}
+    hand_over = AsyncMock(return_value=True)
+
+    reason, _, telegram = _refused(_paused, close_result=unsold, hand_over=hand_over)
+
+    hand_over.assert_awaited_once_with("p1", "Explicit Close (long)")
+    assert reason == (f"{PAUSED[:-1]}; closed 0 long position(s) the signal turned against. "
+                      "Not sold: p1 (Saxo says it cannot be closed now), handed to the position monitor.")
+    telegram.send.assert_awaited_once_with(f"SHORT refused: {reason}")
+
+
+def test_a_position_the_monitor_sold_meanwhile_leaves_the_refusal_as_it_was():
+    reason, calls, telegram = _refused(_paused, close_result=NOTHING_TO_CLOSE)
+
+    assert [call[0] for call in calls.mock_calls] == ["close", "invalidate_balance"] and reason == PAUSED
+    telegram.send.assert_not_awaited()
+
+
+def test_a_sale_that_cannot_even_be_tried_is_said_and_the_signal_stays_refused():
+    def refuse(trading_rule, monitor):
+        _paused(trading_rule, monitor)
+        monitor.close_managed_positions_by_criteria.side_effect = RuntimeError("Saxo did not answer")
+
+    flat = _proven()
+    reason, calls, telegram = _refused(refuse, flat=flat)
+
+    assert reason == not_sold(PAUSED, "long", "RuntimeError: Saxo did not answer")
+    assert [call[0] for call in calls.mock_calls] == ["close", "invalidate_balance"] and not flat.usable(True)
+    telegram.send.assert_awaited_once_with(f"SHORT refused: {reason}")
+
+
+def test_positions_that_cannot_be_read_leave_the_refusal_as_it_was():
+    def refuse(trading_rule, monitor):
+        trading_rule.check_market_hours.side_effect = TradingRuleViolation("Signal is outside of market hours.")
+
+    calls, orchestrator, monitor, trading_rule, db_position_manager, telegram = _handler_dependencies(0)
+    refuse(trading_rule, monitor)
+    db_position_manager.get_open_positions_ids_actions.side_effect = RuntimeError("database down")
+    with patch.object(trader, "TelegramMessageComposer"), patch.object(trader, "journal_signal") as journal_signal:
+        asyncio.run(handle_trading_signal(
+            _signal("uuid-1", action="short"), orchestrator, monitor, trading_rule, db_position_manager, "exchange1",
+            telegram, close_on_refused=True,
+        ))
+
+    assert journal_signal.call_args.args[2:] == (trader.REFUSED, "Signal is outside of market hours.")
+    assert calls.mock_calls == []
+
+
+def test_the_dispatcher_hands_the_setting_to_the_entrys_handler():
+    with patch.object(trader, "handle_trading_signal", new=AsyncMock()) as handler:
+        asyncio.run(dispatch_message(
+            _signal("uuid-3", action="long"),
+            trading_orchestrator=MagicMock(), performance_monitor=MagicMock(), trading_rule=MagicMock(),
+            db_position_manager=MagicMock(), db_perf_manager=MagicMock(), trade_turbo_exchange_id="exchange1",
+            telegram=MagicMock(), position_service=MagicMock(), milestones_eur=[], close_on_refused=True,
+        ))
+
+    assert handler.await_args.kwargs["close_on_refused"] is True

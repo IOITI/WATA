@@ -91,4 +91,10 @@ def warnings(config: dict, live_indices=()) -> list[dict]:
             "A position just bought will be judged on a quote older than its purchase: on 19 October 2026 that sold "
             "a position at a stop it had not reached."
         )})
+
+    if values.get("trade.config.position_management.close_on_refused_entry") is False:
+        found.append({"path": "trade.config.position_management.close_on_refused_entry", "message": (
+            "An entry the trader refuses will leave the position held the other way open, against the strategy: the "
+            "exit a bar raised with that entry is not sent on its own."
+        )})
     return found

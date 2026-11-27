@@ -67,6 +67,7 @@ from src.trade.trader_watch import TraderWatch
 from src.heartbeat import beat_periodically
 from src.schema.validators import check_trading_action
 from src.trade.flat_balance import FlatBalance
+from src.trade.refused_entry import OTHER_SIDE, close_on_refused_entry, not_sold, said
 from src.trade.rehearsal import quiet_while_rehearsing, rehearse
 from src.message_helper import (
     TelegramMessageComposer,
@@ -181,6 +182,88 @@ def nothing_closed(close_result: dict) -> bool:
 
 
 # ─────────────────────────────────────────────────────
+#  An entry refused against a position (src/trade/refused_entry.py)
+# ─────────────────────────────────────────────────────
+
+def signal_stands(trading_rule: TradingRule, data: dict) -> bool:
+    """
+    Whether the signal's own checks pass (its age, its index, its confidence):
+    what refused it is then WATA's state, not the signal. They are run again
+    here, a refusal for the hours or the pause coming before the index and the
+    confidence are read.
+    """
+    try:
+        trading_rule.check_signal_timestamp(data["action"], data.get("alert_timestamp"))
+        trading_rule.get_allowed_indice_id(data["indice"])
+        if data.get("confidence") is not None:
+            trading_rule.check_confidence_threshold(data["confidence"])
+    except Exception:
+        return False
+    return True
+
+
+async def sell_other_side(
+    data: dict,
+    refusal: str,
+    *,
+    trading_rule: TradingRule,
+    performance_monitor: AsyncPerformanceMonitor,
+    db_position_manager: AsyncDbPositionManager,
+    trading_orchestrator: AsyncTradingOrchestrator,
+    hand_over=None,
+    flat_balance: FlatBalance | None = None,
+) -> tuple[str, str | None]:
+    """
+    A refused entry still sells the positions held the other way, which it
+    would have sold before buying: the strategy turned against them. Only when
+    the signal itself stands, and never a position of its own direction.
+
+    What the journal says of the signal (the refusal alone when nothing was to
+    be sold), and what to say on Telegram, None for nothing. Never raises: the
+    signal stays refused whatever becomes of the sale.
+    """
+    action = data["action"]
+    side = OTHER_SIDE[action]
+    try:
+        open_positions = await db_position_manager.get_open_positions_ids_actions()
+        if not any(position.get("action") == side for position in open_positions):
+            return refusal, None
+        if not signal_stands(trading_rule, data):
+            return refusal, None
+    except Exception as error:
+        logger.error("Could not tell whether a %s position is held against the refused %s: %s", side, action, error)
+        return refusal, None
+
+    try:
+        try:
+            result = await performance_monitor.close_managed_positions_by_criteria(
+                action_filter=side,
+                defer_bookkeeping=True,
+            )
+        finally:
+            # Sold or not, cash may have moved: the balance is read again, and none read before stands.
+            trading_orchestrator.invalidate_spending_power()
+            if flat_balance is not None:
+                flat_balance.moved()
+        unsold = await hand_over_unsold(result, hand_over)
+    except Exception as error:
+        logger.error("The %s position held against the refused %s could not be sold: %s", side, action, error)
+        reason = not_sold(refusal, side, f"{type(error).__name__}: {error}")
+        return reason, f"{action.upper()} refused: {reason}"
+
+    closed = result.get("closed_initiated_count") or 0
+    errors = result.get("errors_count") or 0
+    if unsold is None and errors:
+        unsold = f"Errors: {errors}"
+    if not closed and unsold is None:
+        # Sold meanwhile by the position monitor, or not listed by Saxo (left to the reconciliation).
+        return refusal, None
+    reason = said(refusal, side, closed, unsold)
+    logger.info("Refused %s: %s", action, reason)
+    return reason, f"{action.upper()} refused: {reason}"
+
+
+# ─────────────────────────────────────────────────────
 #  Signal handler (long / short)
 # ─────────────────────────────────────────────────────
 
@@ -196,12 +279,15 @@ async def handle_trading_signal(
     hand_over=None,
     watch: TraderWatch | None = None,
     flat_balance: FlatBalance | None = None,
+    close_on_refused: bool = False,
 ):
     """
     Process a long/short signal end-to-end. ``hand_over(position_id, reason)``
     gives the position monitor a sale that did not go through; ``watch`` says
     whether Saxo still renews the login; ``flat_balance`` whether the balance
     last read may size the order (without one it is read again, as always).
+    With ``close_on_refused``, an entry the rules refuse still sells the
+    positions held the other way (``sell_other_side``).
     """
     action = data["action"]
     indice = data["indice"]
@@ -374,8 +460,19 @@ async def handle_trading_signal(
 
     except TradingRuleViolation as trv:
         logger.warning("Rule violation: %s", trv)
-        journal_signal(journal, data, REFUSED, str(trv))
-        # Don't spam telegram for rule violations
+        reason, to_say = str(trv), None
+        if close_on_refused:
+            # The sale first: the journal row closes the stretch in which the admin reads this signal's sales.
+            reason, to_say = await sell_other_side(
+                data, reason,
+                trading_rule=trading_rule, performance_monitor=performance_monitor,
+                db_position_manager=db_position_manager, trading_orchestrator=trading_orchestrator,
+                hand_over=hand_over, flat_balance=flat_balance,
+            )
+        journal_signal(journal, data, REFUSED, reason)
+        # Don't spam telegram for rule violations: only a sale made for one is said
+        if to_say is not None:
+            await telegram.send(to_say)
     except (NoMarketAvailableException, NoTurbosAvailableException, InsufficientFundsException) as e:
         logger.warning("Trade setup issue (%s): %s", type(e).__name__, e)
         journal_signal(journal, data, FAILED, f"{type(e).__name__}: {e}")
@@ -520,6 +617,7 @@ async def dispatch_message(
     hand_over=None,
     watch: TraderWatch | None = None,
     flat_balance: FlatBalance | None = None,
+    close_on_refused: bool = False,
 ):
     # Validate schema
     try:
@@ -544,6 +642,7 @@ async def dispatch_message(
                 hand_over=hand_over,
                 watch=watch,
                 flat_balance=flat_balance,
+                close_on_refused=close_on_refused,
             )
         elif action in CLOSE_ACTIONS:
             try:
@@ -1016,6 +1115,10 @@ async def main():
         # a signal is in hand, while which the timer's rehearsal of a signal's way stands aside.
         flat_balance = FlatBalance()
         in_hand = SignalInHand()
+        # An entry refused while a position is held the other way still sells it (src/trade/refused_entry.py).
+        close_on_refused = close_on_refused_entry(
+            config_manager.get_config_value("trade.config.position_management", {})
+        )
         if keep_warm_interval_seconds > 0:
             keep_warm_task = asyncio.create_task(
                 keep_saxo_session_warm(
@@ -1065,6 +1168,7 @@ async def main():
                     hand_over=ops_publisher.hand_over,
                     watch=watch,
                     flat_balance=flat_balance,
+                    close_on_refused=close_on_refused,
                 )
 
         # Keep polling until Docker's stop (SIGTERM): the signal in hand is finished, then the cleanup below.

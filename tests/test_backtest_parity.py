@@ -823,6 +823,83 @@ def test_with_a_cash_reserve_an_entry_that_finds_no_turbo_sells_the_other_side_a
     assert live_sold and bool(mirrored_sold)
 
 
+# ── an entry refused while a position is held the other way ──
+
+REFUSED_AGAINST = [
+    # (name, now, changes of the rules, indice, confidence, alert age s, trades today, what is sold)
+    ("risky minutes", "21:54:30", {}, "us100", None, 1, 1, "long"),
+    ("the day's trades", "09:30", {"risk_management": {"max_trades_per_day": 1}}, "us100", None, 1, 1, "long"),
+    ("too old a signal", "21:54:30", {}, "us100", None, 3601, 1, None),
+    ("another index", "21:54:30", {}, "de40", None, 1, 1, None),
+    ("under the confidence wanted", "21:54:30", {}, "us100", 0.2, 1, 1, None),
+]
+
+
+@pytest.mark.parametrize(
+    "name, now, changes, indice, confidence, age, trades_today, sold", REFUSED_AGAINST,
+    ids=[scenario[0] for scenario in REFUSED_AGAINST],
+)
+def test_a_refused_entry_sells_the_other_side_as_live(name, now, changes, indice, confidence, age, trades_today, sold):
+    from src.backtest.data import sort_turbos
+    from src.backtest.simulator import SignalEvent
+    from src.trade.refused_entry import close_on_refused_entry
+
+    config = config_with(**changes)
+    moment = paris(now)
+
+    # Live: a long is held, and the short is refused.
+    orchestrator = MagicMock()
+    orchestrator.reserve_cash_percent = 0
+    monitor = MagicMock()
+    monitor.close_managed_positions_by_criteria = AsyncMock(return_value={
+        "closed_initiated_count": 1, "errors_count": 0, "closed_position_ids": ["p0"], "not_closed": [], "not_listed": [],
+    })
+    telegram = MagicMock()
+    telegram.send = AsyncMock()
+    journal = Journal()
+    stamp = (moment - timedelta(seconds=age)).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    signal = {"action": "short", "indice": indice, "signal_uuid": "u2", "signal_timestamp": stamp, "alert_timestamp": stamp}
+    if confidence is not None:
+        signal["confidence"] = confidence
+    positions = Positions(["long"], trades_today=trades_today)
+    rule = TradingRule(Config(config), positions, RiskState(None), Balances(None))
+    with patch.object(live_rules, "datetime", frozen_at(moment)), patch.object(trader, "TelegramMessageComposer"):
+        asyncio.run(trader.handle_trading_signal(
+            signal, orchestrator, monitor, rule, positions, "exchange", telegram, journal=journal,
+            close_on_refused=close_on_refused_entry(config["trade"]["config"]["position_management"]),
+        ))
+    close = monitor.close_managed_positions_by_criteria
+    live = (journal.outcomes[0], close.await_args.kwargs["action_filter"] if close.await_count else None)
+    orchestrator.execute_trade_signal.assert_not_called()
+
+    # The backtest: the same long, bought at 08:30, and the same short.
+    day = moment.date()
+    turbos = {}
+    for number, direction, level, price in ((2, "long", 24_800, 5.0), (3, "short", 25_200, 6.0)):
+        turbo = TurboSeries(TurboRef(
+            instrument_id=number, uic=40_000_000 + number, asset_type="WarrantOpenEndKnockOut", symbol=f"T{number}",
+            description=f"NASDAQ 100 Turbo {direction.title()} {level} SG", issuer="SG", barrier=level,
+            direction=direction, currency="EUR",
+        ))
+        for step in range(14 * 60 * 6):
+            turbo.append(int(CLOCK.epoch(day, "08:00")) + 10 * step, price, price, price, price, price + 0.05, price + 0.05)
+        turbos[direction] = [turbo]
+    start, end = CLOCK.day_bounds(day)
+    data = DayData(day=day, start=start, end=end, indice="us100", turbos=sort_turbos(turbos))
+    simulator = Simulator(from_config(config), CLOCK)
+    arrived = moment.timestamp()
+    simulator.run_day(data, [
+        SignalEvent(1, "pine", "long", arrived_at=CLOCK.epoch(day, "08:30"), alert_at=CLOCK.epoch(day, "08:30"), indice="us100"),
+        SignalEvent(2, "pine", "short", arrived_at=arrived, alert_at=arrived - age, indice=indice, confidence=confidence),
+    ])
+    refused = simulator.signals[1]
+    exits = [trade["exit"]["reason"] for trade in simulator.trades if trade["exit"].get("signal_id") == 2]
+    mirrored = ((refused["fate"], refused["reason"]), exits[0][len("Explicit Close ("):-1] if exits else None)
+
+    assert live == mirrored
+    assert live[1] == sold and ("turned against" in live[0][1]) is (sold is not None)
+
+
 # ── the US market's days, and hours in another timezone ──
 
 NEW_YORK_HOURS = {"market_hours": {"timezone": "America/New_York", "trading_start_hour": 10, "trading_end_hour": 16,

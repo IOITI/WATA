@@ -5,7 +5,9 @@ monitor watches what was bought, ten seconds at a time.
 
 The order of things is the live one (src/trader/__init__.py):
 
-- an entry the rules refuse closes nothing;
+- an entry the rules refuse buys nothing; with ``close_on_refused_entry`` it
+  still sells the positions held the other way when the signal itself stands
+  (src/trade/refused_entry.py), and nothing otherwise;
 - an entry taken closes every position first and buys with what they gave
   (``reserve_cash_percent`` 0, the classic mode), or buys first and closes
   the others after (a cash reserve);
@@ -64,6 +66,7 @@ from src.backtest.rules import (
     exit_decision,
     performance,
     position_scale,
+    signal_stands,
     units_for,
 )
 from src.backtest.selection import NotSelected, select_turbo
@@ -82,6 +85,7 @@ from src.trade.index_estimate import (
 )
 from src.trade.macro_calendar import Calendar, flat_reason, flat_window_at, read_calendar
 from src.trade.market_calendar import MarketCalendar, read_market_calendar
+from src.trade.refused_entry import OTHER_SIDE, said
 
 LONG, SHORT = "long", "short"
 ENTRY_ACTIONS = (LONG, SHORT)
@@ -435,8 +439,10 @@ class Simulator:
         if refusal is not None:
             if refusal.rule == ACCOUNT_GUARD and self._guard_paused_at is None:
                 self._guard_paused_at = decided
-            self._signal(event, decided, REFUSED, refusal.rule, refusal.reason)
             self.trader_free_at = decided
+            sold = self._sell_other_side(event, decided)
+            reason = said(refusal.reason, OTHER_SIDE[event.action], len(sold)) if sold else refusal.reason
+            self._signal(event, decided, REFUSED, refusal.rule, reason, closed_trade_ids=sold)
             return
 
         closed: list[int] = []
@@ -567,6 +573,30 @@ class Simulator:
                         self._close(other, sale_at, "Explicit Close (All)", signal_id=event.id, departed=fill_at),
                     )
                 self.trader_free_at = sale_at
+
+    def _sell_other_side(self, event: SignalEvent, decided: float) -> list[int]:
+        """
+        A refused entry still sells the positions held the other way, as the
+        trader does (``sell_other_side``): only with ``close_on_refused_entry``,
+        only when the signal itself stands, never a position of its direction.
+        """
+        side = OTHER_SIDE[event.action]
+        if not self.settings.close_on_refused_entry or not any(position.direction == side for position in self.positions):
+            return []
+        if not signal_stands(
+            self.settings, indice=event.indice, decided_at=decided, alert_at=event.alert_at, confidence=event.confidence,
+        ):
+            return []
+        sale_at = decided + self.fills.order_seconds()
+        # The monitor goes on until the orders leave: it may have sold first.
+        self._monitor_until(ceil10(sale_at))
+        sold = [
+            self._close(position, sale_at, f"Explicit Close ({side})", signal_id=event.id, departed=decided)
+            for position in list(self.positions) if position.direction == side
+        ]
+        if sold:
+            self.trader_free_at = sale_at
+        return sold
 
     def _sell_after_failed_entry(self, event: SignalEvent, failed_at: float) -> list[int]:
         """

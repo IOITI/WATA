@@ -141,6 +141,7 @@ flowchart TD
 2. **Rule Validation**
    - Verify market hours and timestamp freshness
    - Check allowed indices, duplicate positions, and configured risk limits
+   - An entry refused while a position is held the other way still sells that position (`position_management.close_on_refused_entry`, on unless set to false): an entry taken would have sold it before buying, and the exit a bar raised with that entry is not sent on its own. Only when the refusal is about WATA (its hours, a US release, the pause, a guard, the day's limits); a signal that is itself turned down (too old, under the confidence wanted, another index) sells nothing, and a position of the signal's own direction is never sold for it
    - Use the Watchlist Manager's cached candidates when available and validate instrument eligibility
 
 3. **Trade Execution**

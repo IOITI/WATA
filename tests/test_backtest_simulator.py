@@ -225,6 +225,64 @@ def test_an_entry_the_rules_refuse_closes_nothing():
     assert len(simulator.trades) == 1 and simulator.trades[0]["exit"]["reason"] == "Explicit Close (All)"
 
 
+# ── an entry refused while a position is held the other way (src/trade/refused_entry.py) ──
+
+BOTH_WAYS = (series(2, "long", 24_800, flat(5.0, 840)), series(3, "short", 25_200, flat(6.0, 840)))
+ONE_A_DAY = replace(PLAIN, max_trades_per_day=1)
+MOST_TRADES = "Breaking trading rule: Maximum trades per day reached (1/1)."
+
+
+def test_an_entry_refused_while_the_other_side_is_held_still_sells_it():
+    simulator = run(day_of(*BOTH_WAYS), [signal(1, "long", "09:00"), signal(2, "short", "09:10"), close_of_day()], ONE_A_DAY)
+
+    (trade,) = simulator.trades
+    refused = simulator.signals[1]
+    # Sold as a close signal sells it, an order's time after the refusal; nothing bought.
+    assert (trade["exit"]["reason"], trade["exit"]["signal_id"]) == ("Explicit Close (long)", 2)
+    assert trade["exit"]["filled_at"] == "2026-10-14T07:10:01Z"
+    assert (refused["fate"], refused["rule"], refused["closed_trade_ids"]) == ("refused", "max_trades", [trade["id"]])
+    assert refused["reason"] == f"{MOST_TRADES[:-1]}; closed 1 long position(s) the signal turned against"
+    assert simulator.signals[2]["reason"] == "No open position to close"
+
+
+def test_a_refused_entry_never_sells_a_position_of_its_own_direction():
+    # Refused for the risky minutes, which come before the duplicate: the long held stays.
+    simulator = run(day_of(*BOTH_WAYS), [signal(1, "long", "09:00"), signal(2, "long", "21:54:30"), close_of_day()])
+
+    refused = simulator.signals[1]
+    assert (refused["rule"], refused["reason"], refused["closed_trade_ids"]) == (
+        "risky_hours", "Signal is refused due to risky market hours.", [],
+    )
+    assert simulator.trades[0]["exit"]["reason"] == "Explicit Close (All)"
+
+
+@pytest.mark.parametrize("name, settings, second, rule", [
+    ("too old", ONE_A_DAY,
+     SignalEvent(2, "pine", "short", arrived_at=at("09:10"), alert_at=at("09:10") - 3601, indice="us100"), "signal_age"),
+    ("another index", ONE_A_DAY, signal(2, "short", "09:10", indice="de40"), "indice"),
+    # Refused for the day's trades first: its confidence, read after, still turns the signal down.
+    ("under the confidence wanted", replace(ONE_A_DAY, confidence_enabled=True),
+     signal(2, "short", "09:10", confidence=0.1), "max_trades"),
+])
+def test_a_signal_that_is_itself_turned_down_sells_nothing(name, settings, second, rule):
+    simulator = run(day_of(*BOTH_WAYS), [signal(1, "long", "09:00"), second, close_of_day()], settings)
+
+    refused = simulator.signals[1]
+    assert (refused["fate"], refused["rule"], refused["closed_trade_ids"]) == ("refused", rule, [])
+    assert "turned against" not in refused["reason"]
+    assert simulator.trades[0]["exit"]["reason"] == "Explicit Close (All)"
+
+
+def test_without_the_setting_a_refused_entry_closes_nothing_as_the_runs_made_before():
+    before = replace(ONE_A_DAY, close_on_refused_entry=False)
+
+    simulator = run(day_of(*BOTH_WAYS), [signal(1, "long", "09:00"), signal(2, "short", "09:10"), close_of_day()], before)
+
+    refused = simulator.signals[1]
+    assert (refused["reason"], refused["closed_trade_ids"]) == (MOST_TRADES, [])
+    assert simulator.trades[0]["exit"]["reason"] == "Explicit Close (All)"
+
+
 def test_an_opposite_entry_sells_first_and_buys_with_what_the_sale_gave():
     up = [series(2, "long", 24_800, flat(5.0, 60) + flat(5.5, 780))]
     down = [series(3, "short", 25_200, flat(6.0, 840))]

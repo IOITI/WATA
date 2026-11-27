@@ -84,6 +84,33 @@ def _clock_of(zone: str) -> TradingClock:
     return TradingClock(zone)
 
 
+def _too_old(settings: BacktestSettings, decided_at: float, alert_at: float) -> bool:
+    return decided_at - int(alert_at) > settings.max_signal_age_seconds
+
+
+def _unknown_indice(settings: BacktestSettings, indice: str) -> bool:
+    return indice not in settings.allowed_indices
+
+
+def _under_confidence(settings: BacktestSettings, confidence: float | None) -> bool:
+    return bool(settings.confidence_enabled and confidence is not None and confidence < settings.min_confidence)
+
+
+def signal_stands(
+    settings: BacktestSettings, *, indice: str, decided_at: float, alert_at: float, confidence: float | None,
+) -> bool:
+    """
+    Whether a signal's own checks pass (its age, its index, its confidence),
+    whatever refused it first: the trader's ``signal_stands``. A refused entry
+    sells the positions held the other way only then (src/trade/refused_entry.py).
+    """
+    return not (
+        _too_old(settings, decided_at, alert_at)
+        or _unknown_indice(settings, indice)
+        or _under_confidence(settings, confidence)
+    )
+
+
 def entry_refusal(
     settings: BacktestSettings,
     clock: TradingClock,
@@ -105,8 +132,9 @@ def entry_refusal(
     day_results: list[float] | None = None,
 ) -> Refusal | None:
     """
-    What refuses an entry, in the trader's order, or None. Nothing is closed
-    when an entry is refused. The operator's pause is not part of a backtest,
+    What refuses an entry, in the trader's order, or None. What a refused
+    entry still sells is the simulator's to do (``signal_stands``,
+    src/trade/refused_entry.py). The operator's pause is not part of a backtest,
     nor Saxo's login; the account guard's is (``guard_paused_at``, when it
     tripped), on the ``account_value`` and its ``account_peak`` the simulator
     keeps. The window around US releases needs the ``calendar`` they are read
@@ -114,7 +142,7 @@ def entry_refusal(
     breakers its closed results (``day_results``, in the order they closed).
     """
     # 1. The signal's age, by the clock of the decision (``check_signal_timestamp``).
-    if decided_at - int(alert_at) > settings.max_signal_age_seconds:
+    if _too_old(settings, decided_at, alert_at):
         return Refusal(SIGNAL_AGE, "Signal timestamp is too old")
 
     # 2. The market, by the clock of the decision, not the signal's time (``check_market_hours``), in the
@@ -143,7 +171,7 @@ def entry_refusal(
             return Refusal(MACRO_NEWS, refusal_text(window, settings.timezone))
 
     # 3. The indice (``get_allowed_indice_id``).
-    if indice not in settings.allowed_indices:
+    if _unknown_indice(settings, indice):
         return Refusal(
             INDICE, f"Breaking trading rule : Indice '{indice}' does not exist in the provided dictionary.",
         )
@@ -197,7 +225,7 @@ def entry_refusal(
         return Refusal(*refused)
 
     # 8. The signal's confidence (``check_confidence_threshold``).
-    if settings.confidence_enabled and confidence is not None and confidence < settings.min_confidence:
+    if _under_confidence(settings, confidence):
         return Refusal(CONFIDENCE, (
             f"Breaking trading rule: Signal confidence ({confidence:.2f}) is below "
             f"minimum threshold ({settings.min_confidence:.2f})."

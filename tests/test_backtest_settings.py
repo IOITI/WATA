@@ -91,6 +91,26 @@ def test_a_new_run_waits_for_a_fresh_quote_and_is_priced_at_the_next_one_while_a
         with_changes(live, {"fill_price": "later"})
 
 
+def test_a_new_run_sells_what_a_refused_entry_turned_against_while_a_run_made_before_keeps_it():
+    live = from_config(EXAMPLE)
+    switched_off = json.loads(json.dumps(EXAMPLE))
+    switched_off["trade"]["config"]["position_management"]["close_on_refused_entry"] = False
+    without = json.loads(json.dumps(EXAMPLE))
+    del without["trade"]["config"]["position_management"]["close_on_refused_entry"]
+    # A run's settings.json of before: no such key.
+    before = {name: value for name, value in live.to_dict().items() if name != "close_on_refused_entry"}
+
+    # On unless the configuration says false, as the trader reads it; off for the runs made before.
+    assert live.close_on_refused_entry is True and from_config(without).close_on_refused_entry is True
+    assert from_config(switched_off).close_on_refused_entry is False
+    assert BacktestSettings.from_dict(before).close_on_refused_entry is False
+    assert BacktestSettings().close_on_refused_entry is False
+    changed, _, _ = with_changes(live, {"close_on_refused_entry": False})
+    assert changed.close_on_refused_entry is False
+    entry = next(entry for entry in FIELDS if entry.name == "close_on_refused_entry")
+    assert (entry.group, entry.source) == ("exits", "trade.config.position_management.close_on_refused_entry")
+
+
 def test_a_run_keeps_its_settings_and_reads_them_back():
     settings = from_config(EXAMPLE, capital=12_345)
 

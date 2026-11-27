@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.105.0 - No position left against the strategy
+
+**Release date:** 2026-11-27
+
+An entry the trader takes sells the other side before it buys. An entry it refused sold nothing: the position held the other way stayed open, against a strategy that had just turned. And the TA engine sends only the entry of a bar that also raised the strategy's exit, so that exit was lost with the refused entry. Of the 19 exits the live rule raised from 22 to 27 November 2026, 10 came on a bar that also raised an entry; 6 of those entries were refused and 2 failed. No position was held in any of those cases (the four live positions lasted 1 to 51 minutes), so it cost nothing yet.
+
+- **An entry refused while a position is held the other way still sells it**, as a close signal would (`position_management.close_on_refused_entry`, on unless set to false). When the refusal is about WATA: its hours, the window around a US release, the pause, the account or edge guard, Saxo's login, the day's result, the cooldown, the day's trades, the breakers.
+- **A signal that is itself turned down sells nothing**: too old, under the confidence wanted, or for an index WATA does not trade. Its three checks are read again once it is refused, an earlier check (the hours, the pause) having refused before the index and the confidence were looked at.
+- **Never a position of the signal's own direction**: a "Resume Long" refused while long leaves the long. The close reason is `Explicit Close (long)` or `Explicit Close (short)`.
+- **Said once**: the signal stays `refused` in the journal, its reason followed by what was sold; Telegram gets a message only when something was sold or could not be. What could not be sold is handed to the position monitor, as after any close. A refusal with nothing to sell is as before, and silent.
+- **The backtests do the same** behind a setting of that name (Exits): off for the runs made before, the live value for a new one. The live trader and the simulator are held to the same sales and the same words by a test.
+- The Configuration page has the key under Exits, and warns when it is switched off.
+- Every backtest turns stale (the simulator changed). Changes every WATA container but the control service (read from the release manifest): the configuration's validator is loaded by all of them, so it is a deploy for a closed market.
+
 ## v0.104.1 - A US holiday is no open market for a deploy or a restart
 
 **Release date:** 2026-11-26

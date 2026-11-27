@@ -423,6 +423,21 @@ EXITS = (
                  "Without a quote of the index in the last 2 s, or Saxo's in the last 90 s, the exits wait for "
                  "Saxo's next quote, as when it is off.",),
     ),
+    Param(
+        path="trade.config.position_management.close_on_refused_entry", group="exits",
+        label="Sell the position a refused entry turned against", kind="bool", optional=True, default=True,
+        help="An entry taken sells the other side before it buys. With this, an entry the trader refuses for its own "
+             "state (its hours, a US release, the pause, a guard, the day's limits) still sells the positions held "
+             "the other way.",
+        readers=(TRADER,), consumers=("backtests",), risk=TRADING,
+        effects=("A long refused while a short is held sells the short, and the other way round; a position of the "
+                 "signal's own direction is never sold for it.",
+                 "Nothing is sold for a signal that is itself turned down: too old, under the confidence wanted, or "
+                 "for an index WATA does not trade.",
+                 "The journal keeps the signal as refused, with what was sold; Telegram says the sale.",),
+        caveats=("The TA engine sends only the entry of a bar that also raised an exit: of the 19 exits the live rule "
+                 "raised on 22-27 November 2026, 10 came with an entry, and 8 of those entries were refused or failed.",),
+    ),
 )
 
 SIZE = (
