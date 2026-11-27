@@ -455,6 +455,85 @@ export interface OverviewNews {
   readable: boolean
 }
 
+/** Where a key of config.json is set: its catalog group, its path, and the block whose heading the page leads to. */
+export interface ConfigKeyLink {
+  config: { group: string; path: string; block?: string }
+}
+
+/** The US market closed all day (src/trade/data/us_market_calendar.csv). */
+export interface UsClosedBlock {
+  kind: 'us_closed'
+  name: string
+}
+
+/** The US market closing early: when it closes, when entries end and when what is held is sold, when the settings say. */
+export interface UsEarlyCloseBlock {
+  kind: 'us_early_close'
+  name: string
+  /** "13:00": New York's. */
+  close_new_york: string
+  closes_at: string
+  entries_end_at?: string
+  sale_at?: string
+}
+
+/** A date of config.json's `market_closed_dates`, as written there; `also_us` when the US calendar closes it already. */
+export interface ConfigClosedBlock {
+  kind: 'config_closed'
+  written: string
+  also_us: boolean
+}
+
+/** A US release the macro_news rule names: no entry from `start` to `end`; what is held sold from `flat_from`. */
+export interface ReleaseBlock {
+  kind: 'release'
+  event: string
+  /** The month it covers ("2026-11"), or "statement" for the FOMC. */
+  covers: string
+  time_new_york: string
+  released_at: string
+  start: string
+  end: string
+  flat_from?: string
+}
+
+export type DayBlock = UsClosedBlock | UsEarlyCloseBlock | ConfigClosedBlock | ReleaseBlock
+
+export type DayEffect = 'closed' | 'early_close' | 'window'
+
+export interface BlockedDay {
+  /** "2026-11-26" */
+  day: string
+  /** ISO weekday, 1 Monday to 5 Friday (a closed date may be written on a weekend: 6, 7). */
+  weekday: number
+  /** The strongest of its blocks: closed all day, closing early, or a window around a release. */
+  effect: DayEffect
+  /** Each reason, the strongest first. */
+  blocks: DayBlock[]
+}
+
+/** Every day the trader takes no entry, or fewer (`GET /api/market-calendar`, src/admin/blocked_days.py). */
+export interface MarketCalendar {
+  /** Today in the market's timezone, as the trader reads its closed dates. */
+  today: string
+  timezone: string
+  market_timezone: string
+  us: { readable: boolean; until: string | null; upkeep: string | null; error?: string }
+  closed_dates: { count: number; unreadable: string[]; link: ConfigKeyLink | null }
+  news: {
+    /** Whether the macro_news rule is in config.json: without it, no release blocks anything. */
+    on: boolean
+    readable: boolean
+    events: string[]
+    known_from: string | null
+    known_until: string | null
+    upkeep: string | null
+    error?: string
+    link: ConfigKeyLink | null
+  }
+  days: BlockedDay[]
+}
+
 export interface Signal {
   action: string
   indice: string
@@ -5631,7 +5710,7 @@ export interface LiveCheckCandidate {
 }
 
 /** Where a protection is set: a key of config.json (its catalog group and path) or a page. */
-export type ProtectionLink = { config: { group: string; path: string; block?: string } } | { href: string }
+export type ProtectionLink = ConfigKeyLink | { href: string }
 
 /**
  * One of a rule's protections (src/admin/live_safety.py): ``pass`` on and able to act, ``open`` off (the operator's

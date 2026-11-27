@@ -21,6 +21,7 @@ import { ProviderPage } from '@/features/data/ProviderPage'
 import { ProvidersPage } from '@/features/data/ProvidersPage'
 import { DiskPage } from '@/features/disk/DiskPage'
 import { LogsPage } from '@/features/logs/LogsPage'
+import { MarketCalendarPage } from '@/features/market/MarketCalendarPage'
 import { NotFoundPage } from '@/features/NotFoundPage'
 import { OrdersPage } from '@/features/positions/OrdersPage'
 import { PositionsPage } from '@/features/positions/PositionsPage'
@@ -400,6 +401,7 @@ const router = createBrowserRouter(
           <Route path="signals" element={<SignalsPage />} />
           <Route path="signals/:ref" element={<SignalPage />} />
           <Route path="watchlist" element={<WatchlistPage />} />
+          <Route path="market-calendar" element={<MarketCalendarPage />} />
           <Route path="audit" element={<AuditPage />} />
           <Route path="system" element={<SystemPage />} />
           <Route path="system/disk" element={<DiskPage />} />

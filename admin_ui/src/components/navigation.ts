@@ -35,6 +35,8 @@ export const MENU: MenuEntry<MenuSection>[] = [
   { id: 'orders', path: '/orders', label: 'Orders', section: 'Trading' },
   { id: 'signals', path: '/signals', label: 'Signals', section: 'Trading' },
   { id: 'watchlist', path: '/watchlist', label: 'Watchlist', section: 'Trading' },
+  // Every day the trader takes no entry, or fewer: US holidays and early closes, closed dates, release windows.
+  { id: 'market-calendar', path: '/market-calendar', label: 'Market calendar', section: 'Trading' },
   { id: 'performance', path: '/performance', label: 'Performance', section: 'Analysis' },
   { id: 'report', path: '/report', label: 'Report', section: 'Analysis' },
   { id: 'exits', path: '/exits', label: 'Exits', section: 'Analysis' },

@@ -2,14 +2,16 @@ from datetime import date, datetime, timedelta
 
 import pytz
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from starlette.concurrency import run_in_threadpool
 
 from src.admin.auth import require_session
+from src.admin.blocked_days import blocked_days, early_close_times
 from src.admin.paper import index_asset
 from src.heartbeat import HEARTBEAT_STALE_SECONDS
 from src.trade.account_guard import AccountGuard
 from src.trade.day_breakers import DayBreakers, best_and_now, losses_in_a_row
 from src.trade.macro_calendar import NewsRule, next_window, read_calendar
-from src.trade.market_calendar import entries_end_moment, read_market_calendar, sale_moment
+from src.trade.market_calendar import read_market_calendar
 
 router = APIRouter(prefix="/api", dependencies=[Depends(require_session)])
 
@@ -75,14 +77,8 @@ def _market_day(config_manager, trading_timezone: str, now: datetime) -> dict | 
     early = calendar.early_close_on(day)
     if early is None:
         return None
-    found = {"kind": "early_close", "name": early.name, "closes_at": _iso(early.close_moment())}
-    end_hour = market_hours.get("trading_end_hour")
-    risky = (market_hours.get("risky_trading_start_hour"), market_hours.get("risky_trading_start_minute"))
-    if isinstance(end_hour, int) and None not in risky:
-        found["entries_end_at"] = _iso(entries_end_moment(early, end_hour, risky))
-        if day_trading.get("close_position_time"):
-            found["sale_at"] = _iso(sale_moment(day, day_trading["close_position_time"], zone, calendar, end_hour))
-    return found
+    # The moments the Market calendar page says of the same day (src/admin/blocked_days.py).
+    return {"kind": "early_close", "name": early.name, **early_close_times(early, calendar, market_hours, day_trading, zone)}
 
 
 def _iso(moment: float) -> str:
@@ -183,6 +179,17 @@ async def overview_of(ctx) -> dict:
         "open_positions": await ctx.queries.open_positions(),
         "recent_days": recent["daily"],
     }
+
+
+@router.get("/market-calendar")
+async def market_calendar(request: Request):
+    """
+    Every day the trader takes no entry, or fewer: the US market's holidays and early closes, config.json's closed
+    dates and the windows around US releases (src/admin/blocked_days.py). Two files read: in a thread.
+    """
+    ctx = request.app.state.ctx
+    rules = ctx.config_manager.get_config_value("trade.rules", []) or []
+    return await run_in_threadpool(blocked_days, rules, ctx.settings.timezone, datetime.now(pytz.utc))
 
 
 @router.get("/positions")

@@ -4,7 +4,7 @@
 
 import { formatDay, formatMoney } from 'ioiti-ui'
 
-import { anchorOf, blockAnchorOf } from '@/features/config/catalog'
+import { configKeyHref } from '@/features/config/catalog'
 import type { Protection, ProtectionFunds } from '@/lib/types'
 
 /**
@@ -14,8 +14,7 @@ import type { Protection, ProtectionFunds } from '@/lib/types'
 export function protectionHref(check: Protection): string | null {
   if (!check.link) return null
   if ('href' in check.link) return check.link.href
-  const { group, path, block } = check.link.config
-  return `/config/${group}#${block ? blockAnchorOf(block) : anchorOf(path)}`
+  return configKeyHref(check.link)
 }
 
 const counted = (count: number, one: string, many = `${one}s`) => `${count} ${count === 1 ? one : many}`

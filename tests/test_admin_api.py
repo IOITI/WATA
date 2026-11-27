@@ -50,6 +50,7 @@ AUTHENTICATED_ROUTES = [
     ("GET", "/api/session"),
     ("DELETE", "/api/session"),
     ("GET", "/api/overview"),
+    ("GET", "/api/market-calendar"),
     ("GET", "/api/positions"),
     ("GET", "/api/positions/5001"),
     ("GET", "/api/signals/0b8f6a52-6c1e-4d55-9a8e-3f1c2d4e5a6b"),
@@ -1161,6 +1162,24 @@ def test_overview_says_a_us_holiday_and_an_early_close_as_the_trader_reads_them(
     assert day_after["market_closed_today"] is False
     assert day_after["market_day"]["kind"] == "early_close"
     assert day_after["market_day"]["closes_at"] == "2026-11-27T18:00:00+00:00"
+
+
+def test_the_market_calendar_lists_yesterday_s_holiday_and_today_s_early_close(client):
+    from unittest.mock import patch
+
+    from src.admin.routers import trading
+
+    with patch.object(trading, "datetime") as clock:
+        clock.now.side_effect = lambda tz=None: datetime(2026, 11, 27, 14, 0, tzinfo=timezone.utc).astimezone(tz)
+        answer = client.get("/api/market-calendar").json()
+
+    days = {day["day"]: day for day in answer["days"]}
+    assert answer["today"] == "2026-11-27"
+    assert days["2026-11-26"]["blocks"] == [{"kind": "us_closed", "name": "Thanksgiving Day"}]
+    assert days["2026-11-27"]["effect"] == "early_close"
+    assert days["2026-11-27"]["blocks"][0]["closes_at"] == "2026-11-27T18:00:00+00:00"
+    # The test configuration has no macro_news rule: no release blocks anything.
+    assert answer["news"]["on"] is False
 
 
 def test_cooldown_is_over_once_the_delay_has_passed(client, ctx):

@@ -24,6 +24,8 @@ import { Link } from 'react-router'
 
 import { ActionBadge } from '@/components/status'
 import { useSession } from '@/features/auth/auth-context'
+import { dayHref, dayOffLine, nextDayOff } from '@/features/market/marketCalendarModel'
+import { MARKET_CALENDAR_QUERY } from '@/features/market/marketCalendarQuery'
 import { ClosePositionButton } from '@/features/positions/ClosePositionButton'
 import { LivePositionChart } from '@/features/positions/LivePositionChart'
 import { PositionLiveValue } from '@/features/positions/PositionLiveValue'
@@ -157,6 +159,7 @@ function NextEntryTile({ overview, now }: { overview: Overview; now: number }) {
             <li key={blocker.code}>{blocker.reason}</li>
           ))}
         </ul>
+        <NextDayOff />
       </KpiTile>
     )
   }
@@ -167,7 +170,37 @@ function NextEntryTile({ overview, now }: { overview: Overview; now: number }) {
     duplicates.length > 0
       ? `Except another ${duplicates.join(' or ')} signal: that position is already open`
       : 'Not paused, in trading hours, within the daily limits, no cooldown'
-  return <KpiTile label="Next entry" value={<span className="text-positive">Open</span>} hint={news ? `${hint}. ${news}` : hint} />
+  return (
+    <KpiTile label="Next entry" value={<span className="text-positive">Open</span>} hint={news ? `${hint}. ${news}` : hint}>
+      <NextDayOff />
+    </KpiTile>
+  )
+}
+
+/**
+ * The next day the US market closes, or closes early (a closed date of config.json too), leading to its line of the
+ * Market calendar. Nothing while the calendar is read or cannot be: the tile says what holds entries back now.
+ */
+function NextDayOff() {
+  const calendar = useQuery(MARKET_CALENDAR_QUERY).data
+  const next = calendar ? nextDayOff(calendar) : null
+  if (!calendar) return null
+  return (
+    <p className="mt-1 text-xs text-muted-foreground">
+      {next ? (
+        <>
+          Next day off:{' '}
+          <Link className="underline underline-offset-2" to={dayHref(next.day)}>
+            {dayOffLine(next, calendar.today)}
+          </Link>
+        </>
+      ) : (
+        <Link className="underline underline-offset-2" to="/market-calendar">
+          No day off known ahead: Market calendar
+        </Link>
+      )}
+    </p>
+  )
 }
 
 interface OpenPositionsProps {

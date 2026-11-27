@@ -96,6 +96,7 @@ import type {
   LuxAlgoSearchResult,
   LuxAlgoSource,
   LuxAlgoStatus,
+  MarketCalendar,
   McpState,
   McpToken,
   OrdersPage,
@@ -307,6 +308,8 @@ export const api = {
     request<void>('POST', '/api/client-errors', { body, expectUnauthorized: true }),
 
   overview: () => request<Overview>('GET', '/api/overview'),
+  /** Every day the trader takes no entry, or fewer: US holidays and early closes, closed dates, release windows. */
+  marketCalendar: () => request<MarketCalendar>('GET', '/api/market-calendar'),
   positions: (params: DateRangeParams & { status?: 'open' | 'closed' } = {}) =>
     request<Page<Position>>('GET', `/api/positions${query({ ...params, limit: 2000 })}`),
   position: (positionId: string) =>

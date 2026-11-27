@@ -7,7 +7,7 @@
  */
 
 import type { MenuSection } from '@/components/navigation'
-import type { CatalogBlock, CatalogGroup, CatalogParam, ConfigCatalog, JsonObject, JsonValue } from '@/lib/types'
+import type { CatalogBlock, CatalogGroup, CatalogParam, ConfigCatalog, ConfigKeyLink, JsonObject, JsonValue } from '@/lib/types'
 
 import { getAt, setAt } from './configModel'
 import type { ConfigPath } from './configModel'
@@ -222,6 +222,15 @@ export function sectionsOf(catalog: ConfigCatalog): SectionGroups[] {
 /** The anchor of a block on its group's page. */
 export function blockAnchorOf(blockId: string): string {
   return `b-${blockId}`
+}
+
+/**
+ * Where a key of config.json is set, as the server names it (`config_link` of src/admin/live_safety.py): its row on
+ * the Configuration page, or its block's heading, shown even while the rule the key belongs to is not in config.json.
+ */
+export function configKeyHref(link: ConfigKeyLink): string {
+  const { group, path, block } = link.config
+  return `/config/${group}#${block ? blockAnchorOf(block) : anchorOf(path)}`
 }
 
 export interface GroupCounts {

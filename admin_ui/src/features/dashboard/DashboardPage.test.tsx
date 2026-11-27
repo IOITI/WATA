@@ -6,7 +6,8 @@ import { MemoryRouter } from 'react-router'
 
 import { AuthContext } from '@/features/auth/auth-context'
 import { forgetLiveSamples } from '@/features/positions/liveSamples'
-import type { Health, Overview, Session } from '@/lib/types'
+import type { Health, MarketCalendar, Overview, Session } from '@/lib/types'
+import { marketCalendar } from '@/test/marketCalendar'
 import { openPosition, overview } from '@/test/overview'
 import { WithTrail } from '@/test/WithTrail'
 
@@ -33,11 +34,20 @@ const HEALTH: Health = {
   config_modified_at: '2026-10-23T12:00:00Z',
 }
 
-function serve(answer: Overview) {
+function serve(answer: Overview, calendar: MarketCalendar = marketCalendar()) {
   vi.stubGlobal(
     'fetch',
     vi.fn(async (path: string) => {
-      const body = path === '/api/overview' ? answer : path === '/api/health' ? HEALTH : path === '/api/signals' ? { items: [] } : null
+      const body =
+        path === '/api/overview'
+          ? answer
+          : path === '/api/health'
+            ? HEALTH
+            : path === '/api/signals'
+              ? { items: [] }
+              : path === '/api/market-calendar'
+                ? calendar
+                : null
       if (body === null) throw new Error(`Unexpected request: ${path}`)
       return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })
     }),
@@ -101,6 +111,21 @@ describe('the dashboard', () => {
     expect(within(boards[0]).getByText(/^\d\d:\d\d, New York$/)).toBeInTheDocument()
     expect(within(boards[0]).getByText(/^\d\d:\d\d, Paris$/)).toBeInTheDocument()
     expect(within(boards[0]).getByText(/^US OPEN \d\d:\d\d PARIS · [56] H APART$/)).toBeInTheDocument()
+  })
+
+  it('says the next day off under the next entry, leading to its line of the Market calendar', async () => {
+    serve(overview())
+    renderDashboard()
+
+    const line = await screen.findByRole('link', { name: 'Thu 24 Dec: the US market closes early at 13:00 New York (Christmas Eve)' })
+    expect(line).toHaveAttribute('href', '/market-calendar?year=2026#d-2026-12-24')
+  })
+
+  it('leads to the Market calendar when no day off is known ahead', async () => {
+    serve(overview(), marketCalendar({ days: [] }))
+    renderDashboard()
+
+    expect(await screen.findByRole('link', { name: 'No day off known ahead: Market calendar' })).toHaveAttribute('href', '/market-calendar')
   })
 
   it('draws nothing live without an open position', async () => {

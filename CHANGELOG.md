@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.106.0 - Every day the market is blocked, in the admin
+
+**Release date:** 2026-11-28
+
+On Thanksgiving (26 November 2026) the trader refused every entry and the day after it closed early, but the admin only ever said today's day: nowhere could the days the trader takes no entry be seen ahead, or looked back on.
+
+- **A Market calendar page** (Trading › Market calendar): every day the trader takes no entry, or fewer, from what the trader itself reads. The US market's holidays and early closes (`src/trade/data/us_market_calendar.csv`), the closed dates of config.json (`market_closed_dates`), and, while the `macro_news` rule is in config.json, the window kept around each US release it names. Each day says what WATA does then, in the trading timezone with New York's hour where it is New York's: "no entry all day", "the US market closes at 13:00 New York (19:00 Paris): no entry from …, what is held is sold at …", "no entry from 14:25 to 14:45 around CPI (08:30 New York)".
+- **The year at a glance**: twelve months, each blocked day in the colour of what it does (closed, closing early, a release window), its reasons on hover, a tap or the keyboard, and a link to its line. A tab per year known, today marked, past days greyed but the blocked ones kept readable. The release windows can be hidden.
+- **Today, the next day off and the next release window**, and how many days of each kind the year holds. A closed date of config.json that the US calendar closes already is said, since it can be removed. A calendar that runs out within 30 days, a file that cannot be read, a date that is not one, and a `macro_news` rule that is off are each said, with a link to where they are set.
+- **The dashboard's Next entry tile names the next day off**, leading to its line.
+- An early close's moments are worked out by one function for the page and the dashboard's tile, so the two never differ. The page reads; it changes nothing.
+- `GET /api/market-calendar` (`src/admin/blocked_days.py`). Changes the admin alone; no backtest turns stale.
+
 ## v0.105.0 - No position left against the strategy
 
 **Release date:** 2026-11-27
