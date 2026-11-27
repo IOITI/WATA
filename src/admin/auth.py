@@ -248,9 +248,18 @@ class SessionStore:
 
 
 class LoginThrottle:
-    """Locks a client out for a while after too many consecutive failed logins."""
+    """
+    Locks a client out for a while after too many consecutive failed logins.
+
+    A login that awaits its check (the admin's scrypt, in a thread) is admitted first (``admit``): an attempt
+    under way counts against the limit as a failure would, until it ends (``release``). Without it, every
+    attempt of a burst sent at once was read against the failures counted so far, all of them verified, and the
+    limit held nothing back.
+    """
 
     MAX_TRACKED_CLIENTS = 10000
+    # What a client refused for its attempts under way waits: they end within a second or so.
+    BUSY_RETRY_SECONDS = 1
 
     def __init__(self, max_failures: int = 5, lockout_seconds: float = 900, clock=time.monotonic):
         self._max_failures = max_failures
@@ -258,6 +267,8 @@ class LoginThrottle:
         self._clock = clock
         # client -> (consecutive failures, locked until)
         self._clients: dict[str, tuple[int, float]] = {}
+        # client -> attempts admitted and not ended yet
+        self._under_way: dict[str, int] = {}
 
     def retry_after(self, client: str) -> int:
         """Seconds the client still has to wait (0 when it may try)."""
@@ -265,15 +276,41 @@ class LoginThrottle:
         remaining = locked_until - self._clock()
         return int(remaining) + 1 if remaining > 0 else 0
 
-    def record_failure(self, client: str) -> None:
+    def admit(self, client: str) -> int:
+        """
+        0 when the client may try now, its attempt then counted as under way until ``release``; otherwise the
+        seconds it must wait, nothing counted. Failures and attempts under way together never pass the limit.
+        """
+        wait = self.retry_after(client)
+        if wait:
+            return wait
+        failures, _ = self._clients.get(client, (0, 0.0))
+        under_way = self._under_way.get(client, 0)
+        if failures + under_way >= self._max_failures:
+            return self.BUSY_RETRY_SECONDS
+        self._under_way[client] = under_way + 1
+        return 0
+
+    def release(self, client: str) -> None:
+        """An attempt ``admit`` let through has ended (its failure or success recorded first)."""
+        left = self._under_way.get(client, 0) - 1
+        if left > 0:
+            self._under_way[client] = left
+        else:
+            self._under_way.pop(client, None)
+
+    def record_failure(self, client: str) -> bool:
+        """The failure counted; True when it locks the client out (said once per lockout)."""
         now = self._clock()
         failures, locked_until = self._clients.get(client, (0, 0.0))
         failures += 1
-        if failures >= self._max_failures:
+        locks = failures >= self._max_failures
+        if locks:
             failures, locked_until = 0, now + self._lockout_seconds
         if client not in self._clients and len(self._clients) >= self.MAX_TRACKED_CLIENTS:
             self._clients.clear()
         self._clients[client] = (failures, locked_until)
+        return locks
 
     def record_success(self, client: str) -> None:
         self._clients.pop(client, None)

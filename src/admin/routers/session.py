@@ -52,33 +52,37 @@ async def login(body: LoginRequest, request: Request):
     check_same_origin(request)
     ip = client_ip(request, ctx.trusted_proxies)
 
-    retry_after = ctx.throttle.retry_after(ip)
+    # Counted as under way from here (the check below awaits scrypt in a thread): attempts sent at once are
+    # admitted only as far as the failures they could add stay within the limit.
+    retry_after = ctx.throttle.admit(ip)
     if retry_after:
         return JSONResponse(
             content={"detail": "Too many failed attempts", "retry_after": retry_after},
             status_code=429,
             headers={"Retry-After": str(retry_after)},
         )
+    try:
+        if not ctx.credentials.is_configured():
+            logger.warning(f"Login attempt from {ip} while no admin password is set")
+            raise HTTPException(status_code=503, detail="No admin password is set. Run wataadminpasswd on the server.")
 
-    if not ctx.credentials.is_configured():
-        logger.warning(f"Login attempt from {ip} while no admin password is set")
-        raise HTTPException(status_code=503, detail="No admin password is set. Run wataadminpasswd on the server.")
+        totp_enabled = ctx.credentials.totp_enabled()
+        # scrypt is deliberately slow: keep it off the event loop.
+        authenticated = await run_in_threadpool(ctx.credentials.verify, body.password)
+        if authenticated and totp_enabled:
+            # Only looked at once the password is right: a code is consumed when accepted.
+            authenticated = body.code is not None and ctx.credentials.verify_totp(body.code)
+        if not authenticated:
+            locked = ctx.throttle.record_failure(ip)
+            logger.warning(f"Failed admin login from {ip}")
+            if locked:
+                ctx.audit(request, "login locked", "Too many failed attempts")
+            # The same answer whichever of the two was wrong.
+            raise HTTPException(status_code=401, detail="Invalid password or code" if totp_enabled else "Invalid password")
 
-    totp_enabled = ctx.credentials.totp_enabled()
-    # scrypt is deliberately slow: keep it off the event loop.
-    authenticated = await run_in_threadpool(ctx.credentials.verify, body.password)
-    if authenticated and totp_enabled:
-        # Only looked at once the password is right: a code is consumed when accepted.
-        authenticated = body.code is not None and ctx.credentials.verify_totp(body.code)
-    if not authenticated:
-        ctx.throttle.record_failure(ip)
-        logger.warning(f"Failed admin login from {ip}")
-        if ctx.throttle.retry_after(ip):
-            ctx.audit(request, "login locked", "Too many failed attempts")
-        # The same answer whichever of the two was wrong.
-        raise HTTPException(status_code=401, detail="Invalid password or code" if totp_enabled else "Invalid password")
-
-    ctx.throttle.record_success(ip)
+        ctx.throttle.record_success(ip)
+    finally:
+        ctx.throttle.release(ip)
     response = Response(status_code=204)
     response.set_cookie(
         session_cookie_name(ctx.settings.cookie_secure),

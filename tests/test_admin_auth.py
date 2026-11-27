@@ -159,6 +159,37 @@ def test_successful_login_resets_the_failure_count():
     assert throttle.retry_after("1.2.3.4") == 0
 
 
+def test_attempts_under_way_count_against_the_limit_until_they_end():
+    clock = FakeClock()
+    throttle = LoginThrottle(max_failures=3, lockout_seconds=600, clock=clock)
+
+    throttle.record_failure("1.2.3.4")
+    # One failure counted: two more attempts may be under way, not a third.
+    assert throttle.admit("1.2.3.4") == 0
+    assert throttle.admit("1.2.3.4") == 0
+    assert throttle.admit("1.2.3.4") == LoginThrottle.BUSY_RETRY_SECONDS
+    # Another client is not held back by them.
+    assert throttle.admit("5.6.7.8") == 0
+    throttle.release("5.6.7.8")
+
+    # The first ends well: its place is free again, and the failure is forgotten.
+    throttle.record_success("1.2.3.4")
+    throttle.release("1.2.3.4")
+    assert throttle.admit("1.2.3.4") == 0
+    # The two under way fail, then a third: that one locks the client out, and says so (once).
+    for locks in (False, False):
+        assert throttle.record_failure("1.2.3.4") is locks
+        throttle.release("1.2.3.4")
+    assert throttle.admit("1.2.3.4") == 0
+    assert throttle.record_failure("1.2.3.4") is True
+    throttle.release("1.2.3.4")
+    assert throttle.admit("1.2.3.4") > LoginThrottle.BUSY_RETRY_SECONDS
+    assert throttle._under_way == {}
+
+    clock.advance(601)
+    assert throttle.admit("1.2.3.4") == 0
+
+
 # ── second factor ──
 
 # RFC 6238, appendix B: the SHA-1 test vectors, with the ASCII secret "12345678901234567890".

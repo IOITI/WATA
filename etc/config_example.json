@@ -44,7 +44,7 @@
     }
   },
   "postgresql": {
-    "dsn": "postgresql://wata:wata_secret_change_me@postgres1:5432/wata",
+    "dsn": "postgresql://wata:POSTGRES_PASSWORD_OF_ENV@postgres1:5432/wata",
     "pool_min_size": 2,
     "pool_max_size": 10
   },

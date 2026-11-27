@@ -302,6 +302,42 @@ def test_a_message_is_read_as_webhook_json_with_tradingviews_placeholders():
     assert json.loads(candidate.message)["close"] == 25_004.2
 
 
+def test_a_placeholder_is_read_as_before_and_a_message_made_to_backtrack_costs_nothing():
+    import re
+    import time
+
+    from src.ta_engine.signals import fill_placeholders
+
+    plots = {"Fast": {str(BAR[0]): 1.5}, "Conf": {str(BAR[0]): 0.75}}
+
+    def fill(message):
+        return fill_placeholders(message, bar=BAR, ticker="CAPITAL_US100", timeframe="1", plots=plots, now=T0)
+
+    # The pattern of before (cubic in a run of spaces after "{{"), as the reference on short messages.
+    before = re.compile(r"\{\{\s*([^{}]+?)\s*\}\}")
+
+    def fill_before(message):
+        # Each name as the old pattern captured it, filled alone; one that fills nothing is left as it was.
+        def old(match):
+            alone = "{{" + match.group(1) + "}}"
+            filled = fill(alone)
+            return match.group(0) if filled == alone else filled
+        return before.sub(old, message)
+
+    assert fill('{{ close }} {{plot("Conf")}} {{ plot_0 }} {{time}} {{  }} {{}} {{ nope }}') == (
+        f'25004.2 0.75 1.5 {iso_seconds(T0 - 60)} {{{{  }}}} {{{{}}}} {{{{ nope }}}}')
+    pieces = ["{{", "}}", "{", "}", " ", "\t", "close", "plot_0", 'plot("Fast")', "x", " "]
+    draw = random.Random(7)
+    for _ in range(3000):
+        message = "".join(draw.choice(pieces) for _ in range(draw.randint(0, 12)))
+        assert fill(message) == fill_before(message), message
+    # A script chose this message: the old pattern would still be at it.
+    started = time.monotonic()
+    assert fill("{{" + " " * 200_000) == "{{" + " " * 200_000
+    assert fill(("{{" + " " * 1_000 + "x") * 200).startswith("{{")
+    assert time.monotonic() - started < 2
+
+
 @pytest.mark.parametrize("message, detail", [
     ("not json", "not JSON"),
     ('["long"]', "not a JSON object"),

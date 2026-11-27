@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import subprocess
 
 import pytest
 import yaml
@@ -812,10 +813,36 @@ def test_the_database_is_dumped_by_a_container_that_reaches_it_alone(compose_ser
     assert _backup_image()[-1] == "COPY pg_backup.sh /pg_backup.sh"
     assert backup["entrypoint"] == ["sh", "/pg_backup.sh"]
     assert _mount_modes(backup) == {"/backups": "rw"}
-    assert "PGPASSWORD=${POSTGRES_PASSWORD:-wata_secret_change_me}" in backup["environment"]
+    assert "PGPASSWORD=${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in /app/wata/.env}" in backup["environment"]
     assert "ports" not in backup and "expose" not in backup and "labels" not in backup
     # The admin reads the dumps' report, never writes there.
     assert _mount_modes(compose_services["admin1"])["/app/var/lib/backups"] == "ro"
+
+
+def test_the_database_s_password_has_no_fallback_and_the_install_refuses_without_it(compose_services, tmp_path):
+    # A password written in the compose file is public: the database was made with it whenever .env had none.
+    compose = open("deploy/docker-compose.yml").read()
+    assert "POSTGRES_PASSWORD:-" not in compose and "POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?" in compose
+    assert ("POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in /app/wata/.env}"
+            in compose_services["postgres1"]["environment"])
+    assert "\nPOSTGRES_PASSWORD=\n" in open("deploy/.env.example").read()
+    # The example's address carries no password that works: the operator writes theirs.
+    with open("etc/config_example.json") as example:
+        assert json.load(example)["postgresql"]["dsn"] == "postgresql://wata:POSTGRES_PASSWORD_OF_ENV@postgres1:5432/wata"
+
+    # Refused before the script changes anything on the server (its first mkdir, the newest release's name).
+    script = open("deploy/install_package.sh").read()
+    refusal = script.index('if [ -z "$POSTGRES_PASSWORD_SET" ]; then')
+    assert refusal < script.index("mkdir -p") and refusal < script.index('> "$APP_BASE_DIR/VERSION"')
+    # .env read as compose reads it, without running it.
+    function = script[script.index("env_value() {"):script.index("POSTGRES_PASSWORD_SET=")]
+    for written, read in [("POSTGRES_PASSWORD=s3cr3t", "s3cr3t"), ('POSTGRES_PASSWORD="a b$c"', "a b$c"),
+                          ("POSTGRES_PASSWORD='x'", "x"), ("  POSTGRES_PASSWORD=late  ", "late"),
+                          ("POSTGRES_PASSWORD=", ""), ("# POSTGRES_PASSWORD=commented", ""), ("OTHER=1", "")]:
+        (tmp_path / ".env").write_text(f"RABBITMQ_PASSWORD=r\n{written}\n")
+        found = subprocess.run(["bash", "-c", f'APP_BASE_DIR="{tmp_path}"\n{function}\nenv_value POSTGRES_PASSWORD'],
+                               capture_output=True, text=True, check=True).stdout
+        assert found.rstrip("\n") == read, written
 
 
 def test_the_package_carries_the_backup_script_and_the_server_makes_its_folder():

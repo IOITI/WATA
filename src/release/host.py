@@ -23,6 +23,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -78,6 +79,10 @@ BUILD_CACHE_UNUSED_HOURS = 24
 MAX_REQUEST_BYTES = 4096
 REQUEST_MAX_AGE_SECONDS = 600
 KEPT_REQUESTS = 50
+# The admin's requests folder, below WATA's own folder: the admin writes its last two parts, and five services
+# mount var/lib whole, so each part is opened without following a link (open_within).
+REQUESTS_IN = ("var", "lib", "admin", "deploy", "requests")
+_NO_FOLLOW = getattr(os, "O_NOFOLLOW", 0)
 # Releases kept by prune, the newest first, beside every one still named.
 KEEP_RELEASES = 3
 # Why prune keeps a release (Host.kept_releases), as the Disk page says it (admin_ui/src/features/disk/diskModel.ts).
@@ -145,6 +150,26 @@ def version_key(version: str) -> tuple[int, ...]:
     return tuple(int(part) for part in version.split("."))
 
 
+def open_within(base: str, parts: tuple[str, ...]) -> int:
+    """
+    A descriptor of the folder ``base``/``parts``, each part opened in the one before it without following a link:
+    a container that can write a folder on the way cannot turn the path to another folder of the host, where
+    watadeploy, root, would list, move and remove what it finds. OSError when a part is a link or no folder,
+    FileNotFoundError when one is absent.
+    """
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | _NO_FOLLOW
+    descriptor = os.open(base, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        for part in parts:
+            inner = os.open(part, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = inner
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return descriptor
+
+
 def _write_atomically(path: str, text: str, mode: int = 0o644) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     temporary = f"{path}.{os.getpid()}.tmp"
@@ -192,7 +217,7 @@ class Layout:
 
     @property
     def requests_in(self) -> str:
-        return os.path.join(self.base, "var", "lib", "admin", "deploy", "requests")
+        return os.path.join(self.base, *REQUESTS_IN)
 
     @property
     def env(self) -> str:
@@ -1011,39 +1036,69 @@ class Host:
         return request
 
     def serve_requests(self) -> int:
-        """Carry out each request the admin left (``watadeploy-requests.path`` starts it), oldest first."""
-        folder = self.layout.requests_in
+        """
+        Carry out each request the admin left (``watadeploy-requests.path`` starts it), oldest first.
+
+        The folder is worked through its descriptor (open_within), never by its path: replaced by a link to
+        another folder of the host, it is refused, and nothing there is listed, moved or removed. What is not a
+        request is removed when it is a file or a link (the link itself, never what it names).
+        """
         try:
-            names = sorted(os.listdir(folder), key=lambda name: os.lstat(os.path.join(folder, name)).st_mtime)
+            folder = open_within(self.layout.base, REQUESTS_IN)
         except FileNotFoundError:
             return 0
-        os.makedirs(self.layout.requests_kept, mode=0o700, exist_ok=True)
-        served = 0
-        for name in names:
-            source = os.path.join(folder, name)
-            stem = name[: -len(".json")] if name.endswith(".json") else ""
-            if not REQUEST_ID.match(stem):
-                if os.path.islink(source) or os.path.isfile(source):
-                    os.unlink(source)
-                continue
-            kept = os.path.join(self.layout.requests_kept, name)
-            # Out of the admin's reach before anything is read of it.
-            os.replace(source, kept)
-            served += 1
-            try:
-                request = self.read_request(kept)
-            except (OSError, DeployError) as e:
-                self._refuse(stem, str(e) if isinstance(e, DeployError) else "unreadable")
-                continue
-            try:
-                self.serve(stem, request)
-            except DeployError as e:
-                self._refuse(stem, str(e))
-            except Exception as e:
-                # Said, and the next request served all the same: the file is out of the folder already.
-                self._refuse(stem, f"watadeploy failed on it ({type(e).__name__}): see watadeploy-requests.service's log")
+        except OSError as e:
+            self._out(f"The admin's requests folder ({self.layout.requests_in}) is not a plain folder "
+                      f"({e.strerror or e}): nothing of it is served")
+            return 0
+        try:
+            found = []
+            for name in os.listdir(folder):
+                try:
+                    found.append((os.stat(name, dir_fd=folder, follow_symlinks=False).st_mtime, name))
+                except FileNotFoundError:
+                    continue
+            os.makedirs(self.layout.requests_kept, mode=0o700, exist_ok=True)
+            served = 0
+            for _, name in sorted(found):
+                served += self._serve_left(folder, name)
+        finally:
+            os.close(folder)
         self._prune_requests()
         return served
+
+    def _serve_left(self, folder: int, name: str) -> int:
+        """One entry of the admin's requests folder (its descriptor): 1 when it was a request, served or refused."""
+        stem = name[: -len(".json")] if name.endswith(".json") else ""
+        try:
+            mode = os.stat(name, dir_fd=folder, follow_symlinks=False).st_mode
+        except FileNotFoundError:
+            return 0
+        if not REQUEST_ID.match(stem):
+            if stat.S_ISREG(mode) or stat.S_ISLNK(mode):
+                os.unlink(name, dir_fd=folder)
+            return 0
+        if not stat.S_ISREG(mode):
+            if stat.S_ISLNK(mode):
+                os.unlink(name, dir_fd=folder)
+            self._refuse(stem, "not a request")
+            return 1
+        kept = os.path.join(self.layout.requests_kept, name)
+        # Out of the admin's reach before anything is read of it.
+        os.replace(name, kept, src_dir_fd=folder)
+        try:
+            request = self.read_request(kept)
+        except (OSError, DeployError) as e:
+            self._refuse(stem, str(e) if isinstance(e, DeployError) else "unreadable")
+            return 1
+        try:
+            self.serve(stem, request)
+        except DeployError as e:
+            self._refuse(stem, str(e))
+        except Exception as e:
+            # Said, and the next request served all the same: the file is out of the folder already.
+            self._refuse(stem, f"watadeploy failed on it ({type(e).__name__}): see watadeploy-requests.service's log")
+        return 1
 
     def serve(self, name: str, request: dict) -> None:
         if request.get("id") != name:

@@ -15,9 +15,15 @@ processor and disk), on the server's own python3 with nothing WATA installs. It 
 - PostgreSQL's tables and their monthly partitions (``pg_total_relation_size``, through ``docker exec``).
 
 A source that cannot be read is said in the sample's ``errors`` and the rest is measured all the same. The
-samples are kept in /app/wata/var/lib/disk: ``samples.jsonl`` (14 days, oldest first) and ``latest.json``, the
-newest with the pace of the free space (``trend``), which the admin and the scheduler read. Nothing else is
-written, and nothing is removed but samples older than 14 days.
+samples are kept in /app/wata/var/disk: ``samples.jsonl`` (14 days, oldest first) and ``latest.json``, the
+newest with the pace of the free space (``trend``). Both are copied to /app/wata/var/lib/disk, which the admin
+and the scheduler read. Nothing else is written, and nothing is removed but samples older than 14 days.
+
+This runs as root on the host, and five containers mount var/lib whole and write in it as root: a link they
+left at a name of var/lib/disk would have it write, or empty, any file of the host, and what it read there
+would be theirs. So the samples it goes on from are its own (var/disk, which no container mounts); var/lib/disk
+is only written, each file to a new name of its own (``O_EXCL``) then renamed over the old one, which replaces
+a link rather than writing through it; and no file is opened through a link, nor any but a plain file read.
 """
 
 import argparse
@@ -25,6 +31,7 @@ import fcntl
 import json
 import os
 import re
+import secrets
 import stat
 import subprocess
 import sys
@@ -36,8 +43,15 @@ from src.disk.kinds import KINDS, LOG_FOLDER, VERSION_FOLDER, families, partitio
 from src.disk.trend import moment, per_day
 
 BASE = "/app/wata"
+# What the admin and the scheduler read: written only, never read back (five containers write in var/lib).
 FOLDER = "var/lib/disk"
+# The collector's own samples and its lock, out of every container's reach (none mounts var/ whole).
+OWN_FOLDER = "var/disk"
 LOCK = ".lock"
+# The most read of a file of samples: 14 days of hourly samples take a few megabytes.
+MOST_READ_BYTES = 64 * 1024 * 1024
+_NO_FOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_FOLDER_FLAGS = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | _NO_FOLLOW
 KEEP_DAYS = 14
 VERSION = 1
 DATABASE_CONTAINER = "postgres"
@@ -375,24 +389,148 @@ def with_trend(sample: dict, samples: list[dict]) -> dict:
                                 "over_days": round(over, 2), "samples": len(samples)}}
 
 
-def _write(path: str, text: str) -> None:
-    partial = f"{path}.part"
-    with open(partial, "w", encoding="utf-8") as file:
-        file.write(text)
-    os.replace(partial, path)
+def open_folder(path: str, mode: int = 0o755) -> int:
+    """
+    A descriptor of the folder ``path``, made when absent, its last part opened without following a link (an
+    OSError when it is one, or no folder). Its parents are WATA's own: /app/wata/var/lib is each container's
+    mount itself, which none of them can replace.
+    """
+    os.makedirs(os.path.dirname(os.path.abspath(path)), mode=0o755, exist_ok=True)
+    try:
+        os.mkdir(path, mode)
+    except FileExistsError:
+        pass
+    return os.open(path, _FOLDER_FLAGS)
 
 
-def keep(folder: str, sample: dict) -> dict:
-    """The sample added to those kept, those older than 14 days removed; the newest returned with its trend."""
-    os.makedirs(folder, mode=0o755, exist_ok=True)
-    at = moment(sample["at"])
-    since = at - timedelta(days=KEEP_DAYS)
-    samples = [kept for kept in read_samples(os.path.join(folder, SAMPLES)) if moment(kept["at"]) >= since]
-    samples.append(sample)
-    _write(os.path.join(folder, SAMPLES), "".join(json.dumps(kept, separators=(",", ":")) + "\n" for kept in samples))
-    latest = with_trend(sample, samples)
-    _write(os.path.join(folder, LATEST), json.dumps(latest, separators=(",", ":")))
+def _read(folder: int, name: str) -> str | None:
+    """
+    A file of the folder read whole; None when it is absent, a link, anything but a plain file (a pipe would hold
+    this run for good, a device be opened), or larger than samples can be.
+    """
+    try:
+        if not stat.S_ISREG(os.stat(name, dir_fd=folder, follow_symlinks=False).st_mode):
+            return None
+        descriptor = os.open(name, os.O_RDONLY | _NO_FOLLOW | getattr(os, "O_NONBLOCK", 0), dir_fd=folder)
+        with os.fdopen(descriptor, "rb") as file:
+            found = os.fstat(file.fileno())
+            if not stat.S_ISREG(found.st_mode) or found.st_size > MOST_READ_BYTES:
+                return None
+            data = file.read(MOST_READ_BYTES + 1)
+    except OSError:
+        return None
+    return None if len(data) > MOST_READ_BYTES else data.decode("utf-8", errors="replace")
+
+
+def _there(folder: int, name: str) -> bool:
+    """Whether the folder has anything at ``name`` (a link included, never followed)."""
+    try:
+        os.stat(name, dir_fd=folder, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def _samples_in(text: str | None) -> list[dict]:
+    """The samples of a file's text, oldest first; a line cut short by a stop is skipped (as read_samples does)."""
+    found = []
+    for line in (text or "").split("\n"):
+        try:
+            sample = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(sample, dict) and moment(sample.get("at")):
+            found.append(sample)
+    found.sort(key=lambda sample: moment(sample["at"]))
+    return found
+
+
+def _write(folder: int, name: str, text: str) -> None:
+    """
+    ``name`` of the folder replaced whole: written to a new file of a name of its own, made by this run (``O_EXCL``:
+    never a file that was there, nor through a link), then renamed over ``name``, which replaces a link left there
+    rather than writing through it.
+    """
+    partial = f".{name}.{secrets.token_hex(8)}.part"
+    descriptor = os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NO_FOLLOW, 0o644, dir_fd=folder)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as file:
+            file.write(text)
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(partial, name, src_dir_fd=folder, dst_dir_fd=folder)
+    except BaseException:
+        try:
+            os.unlink(partial, dir_fd=folder)
+        except OSError:
+            pass
+        raise
+
+
+def keep(folder: str, sample: dict, imported_from: str | None = None) -> dict:
+    """
+    The sample added to those kept in ``folder`` (the collector's own), those older than 14 days removed; the
+    newest returned with its trend. While ``folder`` has no samples yet, those of ``imported_from`` are taken
+    (the readers' folder, where they were kept until the collector kept its own), plain files only.
+    """
+    own = open_folder(folder, 0o700)
+    try:
+        text = _read(own, SAMPLES)
+        if text is None and imported_from and not _there(own, SAMPLES):
+            try:
+                readers = open_folder(imported_from)
+            except OSError:
+                readers = None
+            if readers is not None:
+                try:
+                    text = _read(readers, SAMPLES)
+                finally:
+                    os.close(readers)
+        since = moment(sample["at"]) - timedelta(days=KEEP_DAYS)
+        samples = [kept for kept in _samples_in(text) if moment(kept["at"]) >= since]
+        samples.append(sample)
+        _write(own, SAMPLES, "".join(json.dumps(kept, separators=(",", ":")) + "\n" for kept in samples))
+        latest = with_trend(sample, samples)
+        _write(own, LATEST, json.dumps(latest, separators=(",", ":")))
+    finally:
+        os.close(own)
     return latest
+
+
+def publish(folder: str, to: str) -> None:
+    """The samples and the newest of ``folder`` copied to ``to``, the readers' folder, which is only written."""
+    own = os.open(folder, _FOLDER_FLAGS)
+    try:
+        texts = {name: _read(own, name) for name in (SAMPLES, LATEST)}
+    finally:
+        os.close(own)
+    readers = open_folder(to)
+    try:
+        for name, text in texts.items():
+            if text is not None:
+                _write(readers, name, text)
+    finally:
+        os.close(readers)
+
+
+def _newest(folders: list[str]) -> dict | None:
+    """The newest sample of the first of ``folders`` that has one, read as the collector reads its own."""
+    for path in folders:
+        try:
+            folder = os.open(path, _FOLDER_FLAGS)
+        except OSError:
+            continue
+        try:
+            text = _read(folder, LATEST)
+        finally:
+            os.close(folder)
+        try:
+            latest = json.loads(text) if text is not None else None
+        except ValueError:
+            latest = None
+        if isinstance(latest, dict):
+            return latest
+    return None
 
 
 def summary(latest: dict) -> str:
@@ -423,23 +561,33 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--base", default=BASE, help="WATA's folder on the server (/app/wata)")
     arguments = parser.parse_args(argv)
     os.umask(0o022)
-    folder = os.path.join(arguments.base, FOLDER)
+    own = os.path.join(arguments.base, OWN_FOLDER)
+    readers = os.path.join(arguments.base, FOLDER)
     if arguments.command == "show":
-        try:
-            with open(os.path.join(folder, LATEST), encoding="utf-8") as file:
-                print(summary(json.load(file)))
-        except (OSError, ValueError) as e:
-            print(f"No sample to show: {e}", file=sys.stderr)
+        latest = _newest([own, readers])
+        if latest is None:
+            print(f"No sample to show in {own}", file=sys.stderr)
             return 1
+        print(summary(latest))
         return 0
-    os.makedirs(folder, mode=0o755, exist_ok=True)
-    with open(os.path.join(folder, LOCK), "w") as lock:
+    folder = open_folder(own, 0o700)
+    try:
+        lock_descriptor = os.open(LOCK, os.O_RDWR | os.O_CREAT | _NO_FOLLOW, 0o644, dir_fd=folder)
+    finally:
+        os.close(folder)
+    with os.fdopen(lock_descriptor, "w") as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
             print("A sample is being taken already", file=sys.stderr)
             return 0
-        latest = keep(folder, Collector(arguments.base).sample())
+        latest = keep(own, Collector(arguments.base).sample(), imported_from=readers)
+        try:
+            publish(own, readers)
+        except OSError as e:
+            print(summary(latest))
+            print(f"Kept in {own}, not copied to {readers}: {e}", file=sys.stderr)
+            return 1
     print(summary(latest))
     return 0
 

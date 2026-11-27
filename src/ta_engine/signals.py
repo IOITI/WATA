@@ -39,7 +39,10 @@ CLOSE_WITH_ENTRY = (
     "close-position not sent: the same bar raised an entry, which sells the other side first "
     "(sent after it, the close would sell the position just opened)"
 )
-_PLACEHOLDER = re.compile(r"\{\{\s*([^{}]+?)\s*\}\}")
+# What is between {{ and }}, its spaces taken off in fill_placeholders: one run of the class and no other
+# quantifier, so a message the script chose cannot make it backtrack (``\s*([^{}]+?)\s*`` took a time cubic in
+# a run of spaces after "{{", in the engine's own loop). The same placeholders are read as before.
+_PLACEHOLDER = re.compile(r"\{\{([^{}]+)\}\}")
 _PLOT_BY_TITLE = re.compile(r'^plot\(\s*"([^"]*)"\s*\)$')
 _PLOT_BY_INDEX = re.compile(r"^plot_(\d+)$")
 
@@ -104,7 +107,7 @@ def fill_placeholders(message: str, *, bar: list, ticker: str, timeframe: str, p
     at = str(bar[0])
 
     def filled(match: re.Match) -> str:
-        name = match.group(1)
+        name = match.group(1).strip()
         if name in values:
             return values[name]
         by_title = _PLOT_BY_TITLE.match(name)

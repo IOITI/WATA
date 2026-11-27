@@ -292,6 +292,52 @@ def test_licences_are_read_from_a_sources_opening_comments():
     assert licence_of("//@version=6\n" + "x = 1\n" * 30 + "// licensed under MIT")["licence"] == "see LuxAlgo's NOTICE"
 
 
+def _licence_before(source: str) -> dict:
+    """licence_of with the patterns of before (quadratic on a long line), the reference on short headers."""
+    import re
+    licences = (
+        re.compile(r"licen[cs]ed under (?:a |an |the )?(?P<said>.+?)(?:\s+https?://\S+)?\s*$", re.IGNORECASE),
+        re.compile(r"subject to the terms of the (?P<said>.+?)(?:\s+at\s+https?://\S+)?\s*$", re.IGNORECASE),
+    )
+    short_of = re.compile(r"\((?P<short>[A-Z][A-Za-z0-9 .\-]{1,40})\)\s*$")
+    owner_of = re.compile(r"©\s*(?P<owner>.+?)\s*$")
+    licence = owner = None
+    for line in source.splitlines()[:20]:
+        text = line.strip()
+        if not text.startswith("//"):
+            continue
+        text = text.lstrip("/").strip()
+        for pattern in licences:
+            found = pattern.search(text)
+            if found and licence is None:
+                said = found.group("said").strip().rstrip(".")
+                short = short_of.search(said)
+                licence = short.group("short") if short else said[:120]
+        mark = owner_of.search(text)
+        if mark and owner is None:
+            owner = mark.group("owner")[:80]
+    return {"licence": licence or "see LuxAlgo's NOTICE", "owner": owner}
+
+
+def test_a_header_reads_as_before_and_a_line_made_to_backtrack_costs_nothing():
+    import random
+    import time
+
+    pieces = ["// ", "//", "\n", " ", "  ", "\t", "©", "LuxAlgo", "licensed under ", "Licenced under the ",
+              "subject to the terms of the ", " at ", " AT ", "https://x.y/z", "HTTP://a", "https://", "(CC BY 4.0)",
+              ".", "MIT", "a ", "x", " "]
+    draw = random.Random(11)
+    for _ in range(20000):
+        source = "".join(draw.choice(pieces) for _ in range(draw.randint(0, 14)))
+        assert licence_of(source) == _licence_before(source), repr(source)
+    # Saved through the MCP endpoint or answered by LuxAlgo: the old patterns took minutes on these.
+    started = time.monotonic()
+    found = licence_of("// © LuxAlgo" + " " * 250_000 + "x\n// licensed under MIT" + " " * 250_000 + "x\n"
+                       "// subject to the terms of the MPL" + " " * 250_000 + "at x")
+    assert found["owner"].startswith("LuxAlgo") and found["licence"].startswith("MIT")
+    assert time.monotonic() - started < 2
+
+
 class _Recorded:
     """An ASGI middleware that keeps the Authorization header of each request."""
 

@@ -6,6 +6,7 @@ its folders are real ones under tmp_path.
 
 import json
 import os
+import stat
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
@@ -201,6 +202,88 @@ def test_a_line_cut_short_is_skipped(tmp_path):
     (tmp_path / collect.SAMPLES).write_text(json.dumps({"at": AT.isoformat()}) + "\n{\"at\": \"2026-11\n")
 
     assert len(collect.read_samples(str(tmp_path / collect.SAMPLES))) == 1
+
+
+def _hourly(hours: int = 0) -> dict:
+    return {"at": (AT + timedelta(hours=hours)).isoformat(), "filesystems": [
+        {"wata": True, "total": GB, "available": GB - hours * MB}]}
+
+
+def test_a_link_left_where_the_readers_read_is_replaced_and_never_written_through(tmp_path):
+    # Five containers write in var/lib as root; this runs as root on the host.
+    own, readers = tmp_path / "var/disk", tmp_path / "var/lib/disk"
+    readers.mkdir(parents=True)
+    victim = tmp_path / "victim.txt"
+    victim.write_text("a file of the host")
+    names = (collect.SAMPLES, collect.LATEST, f"{collect.SAMPLES}.part", f"{collect.LATEST}.part", collect.LOCK)
+    for name in names:
+        os.symlink(victim, readers / name)
+
+    latest = collect.keep(str(own), _hourly(), imported_from=str(readers))
+    collect.publish(str(own), str(readers))
+
+    assert victim.read_text() == "a file of the host"
+    for name in (collect.SAMPLES, collect.LATEST):
+        assert not (readers / name).is_symlink()
+        assert (readers / name).read_text() == (own / name).read_text()
+    assert json.loads((readers / collect.LATEST).read_text()) == latest
+    assert not [path for path in readers.iterdir() if path.name.endswith(".part") and not path.is_symlink()]
+
+
+def test_the_samples_gone_on_from_are_the_collector_s_own_never_the_readers(tmp_path):
+    own, readers = tmp_path / "var/disk", tmp_path / "var/lib/disk"
+    readers.mkdir(parents=True)
+    # Kept where the readers read until the collector kept its own: taken once.
+    (readers / collect.SAMPLES).write_text(json.dumps(_hourly(0)) + "\n")
+    collect.keep(str(own), _hourly(1), imported_from=str(readers))
+    assert len(collect.read_samples(str(own / collect.SAMPLES))) == 2
+    collect.publish(str(own), str(readers))
+
+    # Anything written there since is never read back.
+    forged = {**_hourly(2), "forged": True}
+    (readers / collect.SAMPLES).write_text(json.dumps(forged) + "\n")
+    collect.keep(str(own), _hourly(3), imported_from=str(readers))
+    assert [sample.get("forged") for sample in collect.read_samples(str(own / collect.SAMPLES))] == [None] * 3
+    assert stat.S_IMODE(own.stat().st_mode) == 0o700
+
+
+def test_what_is_not_a_plain_file_is_never_read_and_a_link_for_the_folder_never_entered(tmp_path):
+    import threading
+
+    own, readers = tmp_path / "var/disk", tmp_path / "var/lib/disk"
+    readers.mkdir(parents=True)
+    # A pipe would hold a reader for good.
+    os.mkfifo(readers / collect.SAMPLES)
+    done = threading.Thread(target=collect.keep, args=(str(own), _hourly()), kwargs={"imported_from": str(readers)},
+                            daemon=True)
+    done.start()
+    done.join(5)
+    assert not done.is_alive()
+    assert len(collect.read_samples(str(own / collect.SAMPLES))) == 1
+
+    # The readers' folder itself made a link to another folder of the host: nothing is written there.
+    elsewhere = tmp_path / "etc"
+    elsewhere.mkdir()
+    os.remove(readers / collect.SAMPLES)
+    readers.rmdir()
+    os.symlink(elsewhere, readers)
+    with pytest.raises(OSError):
+        collect.publish(str(own), str(readers))
+    assert list(elsewhere.iterdir()) == []
+
+
+def test_now_says_what_it_kept_when_the_readers_folder_is_not_a_folder(tmp_path, monkeypatch, capsys):
+    base = _base(tmp_path)
+    monkeypatch.setattr(collect, "run", _runner({"info": "/var/lib/docker\n", "system df": DOCKER_DF,
+                                                 "pg_total_relation_size": TABLES, "pg_database_size": "1\n"}))
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (base / "var/lib").mkdir(parents=True, exist_ok=True)
+    os.symlink(elsewhere, base / "var/lib/disk")
+
+    assert collect.main(["now", "--base", str(base)]) == 1
+    assert "not copied to" in capsys.readouterr().err
+    assert (base / "var/disk" / collect.SAMPLES).exists() and list(elsewhere.iterdir()) == []
 
 
 def test_now_measures_keeps_and_says_it_in_short(tmp_path, monkeypatch, capsys):

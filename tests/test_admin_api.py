@@ -957,6 +957,46 @@ def test_throttle_uses_the_address_added_by_the_proxy(anonymous):
     assert anonymous.post("/api/session", json={"password": PASSWORD}, headers=headers).status_code == 204
 
 
+def test_a_burst_of_logins_sent_at_once_is_held_to_the_limit(ctx, tmp_path, monkeypatch):
+    # Each attempt awaits its check in a thread: until the limit counted the attempts under way, all of a
+    # burst were read against the failures counted so far, and every one of them was verified.
+    import threading
+    import time
+
+    import httpx
+
+    verified = []
+    lock = threading.Lock()
+    real_verify = ctx.credentials.verify
+
+    def slow_verify(password):
+        with lock:
+            verified.append(password)
+        time.sleep(0.2)
+        return real_verify(password)
+
+    monkeypatch.setattr(ctx.credentials, "verify", slow_verify)
+    app = create_app(ctx, static_dir=str(tmp_path / "no-interface"))
+
+    async def burst():
+        transport = httpx.ASGITransport(app=app, client=(OTHER_CONTAINER, 50000))
+        async with httpx.AsyncClient(transport=transport, base_url=ORIGIN) as client:
+            return await asyncio.gather(*(
+                client.post("/api/session", json={"password": f"wrong password {attempt}"}, headers=SAME_ORIGIN)
+                for attempt in range(20)))
+
+    answers = [response.status_code for response in asyncio.run(burst())]
+
+    # max_failures is 3 in these tests: three checked, the others refused before any check.
+    assert len(verified) == 3
+    assert sorted(answers) == [401] * 3 + [429] * 17
+    assert ctx.throttle.retry_after(OTHER_CONTAINER) > 0
+    # Said once for the lockout, not once per attempt.
+    assert [entry["action"] for entry in ctx.audit_log.read(50)].count("login locked") == 1
+    # Nothing is left counted as under way.
+    assert ctx.throttle._under_way == {}
+
+
 def test_a_caller_that_is_not_the_proxy_cannot_choose_its_address(ctx, tmp_path):
     # Another container of the network reaching the admin port directly.
     with make_client(ctx, tmp_path / "no-interface", peer=OTHER_CONTAINER) as direct:

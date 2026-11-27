@@ -440,6 +440,42 @@ def test_a_link_or_a_stranger_in_the_requests_folder_is_never_followed(server, t
     assert secret.read_text() == '{"id": "x"}'
 
 
+@pytest.mark.parametrize("replaced", ["requests", "deploy", "admin"])
+def test_a_requests_folder_made_a_link_to_another_folder_is_never_entered(server, tmp_path, replaced):
+    # The admin writes var/lib/admin, and five services mount var/lib whole: any part of the way may be a link.
+    host, docker, clock, _ = server
+    # Another folder of the host, where the path would lead through the link whichever part it replaced.
+    elsewhere = tmp_path / "dumps"
+    for folder in (elsewhere, elsewhere / "requests", elsewhere / "deploy" / "requests"):
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "wata-2026-11-26.dump").write_text("a dump")
+        (folder / ("2" * 32 + ".json")).write_text("{}")
+    admin = tmp_path / "wata/var/lib/admin"
+    link = {"requests": admin / "deploy" / "requests", "deploy": admin / "deploy", "admin": admin}[replaced]
+    link.parent.mkdir(parents=True, exist_ok=True)
+    os.symlink(elsewhere, link)
+    before = sorted(str(path.relative_to(elsewhere)) for path in elsewhere.rglob("*"))
+
+    assert host.serve_requests() == 0
+
+    assert sorted(str(path.relative_to(elsewhere)) for path in elsewhere.rglob("*")) == before
+    assert not os.path.exists(host.layout.requests_kept) or os.listdir(host.layout.requests_kept) == []
+    assert docker.running["admin1"]["Image"] == OLD_ID
+
+
+def test_a_folder_named_like_a_request_is_refused_and_the_next_served(server):
+    host, docker, clock, _ = server
+    os.makedirs(os.path.join(host.layout.requests_in, "4" * 32 + ".json"))
+    path = _request(host, clock)
+    os.utime(path, (clock.now + 1, clock.now + 1))
+
+    assert host.serve_requests() == 2
+
+    states = {entry["id"]: entry["state"] for entry in host.read_status()["requests"]}
+    assert states["4" * 32] == "refused" and states["0" * 32] == "done"
+    assert docker.running["admin1"]["Image"] == NEW_ID
+
+
 def test_prune_keeps_the_newest_and_whatever_is_still_named(server):
     host, docker, _, _ = server
     docker.images["wata-base:0.52.1"] = {"Id": "sha256:" + "d" * 64}

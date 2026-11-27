@@ -64,12 +64,16 @@ CALL_SECONDS = 20.0
 # 36 and 38 challenges, measured on 2026-10-31; 2 s for 5).
 SLOW_CALLS = {"propfirms_validate_strategy": 90.0}
 SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,120}$")
+# Each licence sentence's start, the rest of its line taken whole; the address that ends it (after "at" for the
+# second) is taken off in _without_address. No lazy group before an end of line: ``(.+?)\s*$`` backtracked over every
+# space of a long line at each character, minutes of the admin's one process for a header line made so.
 _LICENCE = (
-    re.compile(r"licen[cs]ed under (?:a |an |the )?(?P<said>.+?)(?:\s+https?://\S+)?\s*$", re.IGNORECASE),
-    re.compile(r"subject to the terms of the (?P<said>.+?)(?:\s+at\s+https?://\S+)?\s*$", re.IGNORECASE),
+    (re.compile(r"licen[cs]ed under (?:a |an |the )?(?P<said>.+)", re.IGNORECASE), ()),
+    (re.compile(r"subject to the terms of the (?P<said>.+)", re.IGNORECASE), ("at",)),
 )
+_ADDRESS = re.compile(r"https?://\S+", re.IGNORECASE)
 _SHORT = re.compile(r"\((?P<short>[A-Z][A-Za-z0-9 .\-]{1,40})\)\s*$")
-_OWNER = re.compile(r"©\s*(?P<owner>.+?)\s*$")
+_OWNER = re.compile(r"©\s*(?P<owner>.+)")
 # How LuxAlgo says it has no such thing: {"error": "Unknown indicator slug 'x'."}.
 _UNKNOWN = re.compile(r"\bUnknown \w+ slug\b", re.IGNORECASE)
 
@@ -82,6 +86,39 @@ class LuxAlgoUnknown(LuxAlgoRefused):
     """LuxAlgo has no indicator, concept or family by that slug."""
 
 
+def _last_word(text: str, end: int) -> tuple[int, int]:
+    """Where the last word of ``text[:end]`` starts, and where the spaces before it start."""
+    word = end
+    while word > 0 and not text[word - 1].isspace():
+        word -= 1
+    spaces = word
+    while spaces > 0 and text[spaces - 1].isspace():
+        spaces -= 1
+    return word, spaces
+
+
+def _without_address(rest: str, before: tuple[str, ...]) -> str:
+    """
+    A licence sentence without the address that ends it (its last word, after a space), and ``before`` it the
+    words between (``at``): what the lazy patterns of before took, ``(.+?)(?:\\s+URL)?\\s*$`` (at least one
+    character, the first space when the sentence is only spaces before its address), read in a time linear in
+    the line.
+    """
+    rest = rest.rstrip()
+    end = len(rest)
+    word, spaces = _last_word(rest, end)
+    if word == spaces or not _ADDRESS.fullmatch(rest[word:end]):
+        return rest
+    for expected in reversed(before):
+        end = spaces
+        word, spaces = _last_word(rest, end)
+        if word == spaces or word == end or not re.fullmatch(expected, rest[word:end], re.IGNORECASE):
+            return rest
+    if spaces:
+        return rest[:spaces]
+    return rest[:1] if word >= 2 else rest
+
+
 def licence_of(source: str) -> dict:
     """What a source's opening comments say of its licence and its owner."""
     licence = owner = None
@@ -90,15 +127,15 @@ def licence_of(source: str) -> dict:
         if not text.startswith("//"):
             continue
         text = text.lstrip("/").strip()
-        for pattern in _LICENCE:
+        for pattern, before in _LICENCE:
             found = pattern.search(text)
             if found and licence is None:
-                said = found.group("said").strip().rstrip(".")
+                said = _without_address(found.group("said"), before).strip().rstrip(".")
                 short = _SHORT.search(said)
                 licence = short.group("short") if short else said[:120]
         mark = _OWNER.search(text)
         if mark and owner is None:
-            owner = mark.group("owner")[:80]
+            owner = mark.group("owner").rstrip()[:80]
     return {"licence": licence or "see LuxAlgo's NOTICE", "owner": owner}
 
 
