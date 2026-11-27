@@ -26,6 +26,7 @@ import os
 import sys
 import uuid
 from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -800,10 +801,13 @@ def test_the_bots_commands_read_what_the_services_wrote_and_cannot_write(in_a_da
 
     async def scenario(writer, reader):
         now = datetime.now(timezone.utc)
+        # Opened today in the commands' timezone: 30 minutes before now was the day before for the first half hour
+        # after midnight in Paris, and "/day" counted none (CI run of 2026-11-27 23:20 UTC).
+        midnight = datetime.now(ZoneInfo(CommandSettings(dsn="").timezone)).replace(hour=0, minute=0, second=0, microsecond=0)
         await writer.execute(
             "INSERT INTO turbo_data_position (position_id, action, position_status, execution_time_open, position_amount,"
             " position_open_price, position_max_performance_percent) VALUES ('p1', 'long', 'Open', $1, 220, 4.52, 2.4)",
-            now - timedelta(minutes=30),
+            max(now - timedelta(minutes=30), midnight.astimezone(timezone.utc)),
         )
         await writer.execute("INSERT INTO position_live_value VALUES ('p1', 4.61, 1.99, $1)", now)
         await writer.execute(
