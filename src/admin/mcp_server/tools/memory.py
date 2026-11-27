@@ -37,8 +37,10 @@ def register(server, research) -> None:
             raise Refused(f"A kind is one of {', '.join(KINDS)}")
         memory = _memory(research)
         entries = await run_in_threadpool(memory.entries, kind or None)
+        paused = await run_in_threadpool(memory.pause)
+        # Since when, never by whom: the record keeps the operator's address, which leaves the server here.
         return compacted({"entries": [listed(entry) for entry in entries], "count": len(entries),
-                          "paused": await run_in_threadpool(memory.pause)})
+                          "paused": {"since": paused.get("since")} if isinstance(paused, dict) else paused})
 
     @research_tool(server, calls, name="memory_read", title="Entries of the AI agent's memory", read_only=True)
     async def memory_read(names: list[str]) -> dict:

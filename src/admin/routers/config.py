@@ -12,6 +12,7 @@ from src.admin.ta_monitor import rules_by_id
 
 # Changed paths named in an audit entry (and so on Telegram) before the rest are counted.
 NAMED_CHANGES = 8
+NAMED_PATH_MOST = 120
 SERVICE_NAMES = {service.id: service.name for service in SERVICES}
 
 router = APIRouter(prefix="/api/config", dependencies=[Depends(require_session)])
@@ -39,7 +40,9 @@ def changes_said(saved: dict) -> str:
     paths = [change["path"] for change in saved.get("changes", [])]
     if not paths:
         return "Nothing changed."
-    named = ", ".join(paths[:NAMED_CHANGES]) + (f" and {len(paths) - NAMED_CHANGES} more" if len(paths) > NAMED_CHANGES else "")
+    # Each key's path bounded: a key's name is the saver's, and the announcement must stay within Telegram's size.
+    shown = [path if len(path) <= NAMED_PATH_MOST else path[:NAMED_PATH_MOST - 1] + "…" for path in paths[:NAMED_CHANGES]]
+    named = ", ".join(shown) + (f" and {len(paths) - NAMED_CHANGES} more" if len(paths) > NAMED_CHANGES else "")
     services = [SERVICE_NAMES[service] for service in saved.get("impact", {}).get("services", [])]
     applies = f" Applies at the next start of: {', '.join(services)}." if services else ""
     return f"Changed {named}.{applies}"

@@ -347,6 +347,35 @@ def test_the_admin_waits_for_its_backtests_and_its_agent(server):
     assert "AI agent" in next(step for step in steps if step.container == "admin1").held
 
 
+def test_a_pipe_left_where_watadeploy_reads_never_holds_it(server):
+    # Containers write, as root, where these are: a named pipe no one writes to would hold a plan for good, and
+    # an apply with the deploy's lock.
+    import threading
+
+    host, docker, clock, _ = server
+    base = host.layout.base
+    conversation = os.path.join(base, "var/lib/admin/agent/conversations/c1")
+    os.makedirs(conversation)
+    os.makedirs(os.path.join(base, "var/lib/admin/ta"))
+    os.makedirs(os.path.join(base, "var/log/wata-scheduler"))
+    for path in ("var/lib/admin/ta/rules.json", "var/lib/admin/agent/conversations/c1/meta.json",
+                 "var/log/wata-scheduler/wata-scheduler.log"):
+        os.mkfifo(os.path.join(base, path))
+    planned = []
+    thread = threading.Thread(target=lambda: planned.append(host.plan()), daemon=True)
+    thread.start()
+    thread.join(10)
+    assert not thread.is_alive() and planned
+    assert host._scheduler_line() is None
+    # config.json made a pipe too: read as nothing, never waited on.
+    os.remove(host.layout.config)
+    os.mkfifo(host.layout.config)
+    thread = threading.Thread(target=lambda: planned.append(host._config()), daemon=True)
+    thread.start()
+    thread.join(10)
+    assert not thread.is_alive() and planned[-1] == {}
+
+
 def test_a_container_that_does_not_stay_up_goes_back_and_the_rest_waits(server):
     host, docker, clock, _ = server
     change(docker, "src/trade/rules.py", "r2")

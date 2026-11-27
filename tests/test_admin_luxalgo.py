@@ -390,3 +390,23 @@ def test_over_the_wire_the_account_token_is_sent_once_signed_in(monkeypatch):
     assert [given["query"] for _, given in fake.received] == ["vwap", "rsi"]
     assert None in app.headers and "Bearer an-access-token" in app.headers
     assert {header for header in app.headers} <= {None, "Bearer an-access-token"}
+
+
+def test_a_schema_luxalgo_lists_is_never_followed_outside_itself(monkeypatch):
+    # jsonschema's default registry fetches what a $ref names: any address, a file, on the admin's loop.
+    import urllib.request
+
+    from src.admin.luxalgo import arguments_refusal
+
+    def fetched(*args, **kwargs):
+        raise AssertionError("a schema's reference was fetched")
+
+    monkeypatch.setattr(urllib.request, "urlopen", fetched)
+    local = {"type": "object", "properties": {"slug": {"$ref": "#/$defs/slug"}}, "$defs": {"slug": {"type": "string"}}}
+    assert arguments_refusal("library_get_indicator", {"slug": "smc"}, local) is None
+    assert "is not of type 'string'" in arguments_refusal("library_get_indicator", {"slug": 3}, local)
+    for outside in ("http://watchlist_manager1:8081/watchlist/best", "file:///etc/passwd", "https://attacker.example/x"):
+        said = arguments_refusal("library_get_indicator", {"slug": "smc"},
+                                 {"type": "object", "properties": {"slug": {"$ref": outside}}})
+        assert said and "outside itself" in said
+    assert "cannot be checked" in arguments_refusal("library_search", {}, {"type": 12})

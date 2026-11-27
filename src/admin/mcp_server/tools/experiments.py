@@ -72,7 +72,7 @@ def register(server, research) -> None:
             if isinstance(criterion, dict) and criterion.get("figure") not in CRITERIA_FIGURES:
                 raise Refused(f"{criterion.get('figure')!r} is not a figure criteria take: one of {', '.join(CRITERIA_FIGURES)}")
         families = await run_in_threadpool(journal.families)
-        close = close_family((family or "").strip(), families)
+        close = await run_in_threadpool(close_family, (family or "").strip(), families)
         if close is not None and not new_family:
             raise Refused(
                 f"{family!r} looks like the family {close!r} ({families[close]} trials): open it in {close!r}, or say "

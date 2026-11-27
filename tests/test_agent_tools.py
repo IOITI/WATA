@@ -280,3 +280,5 @@ def test_a_review_that_only_reads_is_refused_every_write_but_its_verdict(researc
     assert "this review only reads" not in listed.text
     assert tools.reviews_may("set_verdict") and tools.reviews_may("show_chart") and tools.reviews_may("pine_run")
     assert not tools.reviews_may("pine_save") and not tools.reviews_may("rule_shadow_save")
+    # Nor the admin's own reads nor LuxAlgo's: its request holds the reviewed party's words.
+    assert not any(tools.reviews_may(name) for name in ("ops_logs", "ops_changes", "ops_health", "luxalgo_call"))

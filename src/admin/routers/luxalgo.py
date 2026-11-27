@@ -319,7 +319,8 @@ async def callback(request: Request, code: str | None = None, state: str | None 
         return RedirectResponse(f"{PAGE}?luxalgo=refused&why=off", status_code=303)
     if error or not code or not state:
         said = error or "no code"
-        logger.warning("LuxAlgo sent the browser back without a code (%s)", said[:100])
+        # On one line: anyone can call this address, and a line break would write an entry of its own in the log.
+        logger.warning("LuxAlgo sent the browser back without a code (%s)", " ".join(said.split())[:100])
         return RedirectResponse(f"{PAGE}?luxalgo=refused&why={urllib.parse.quote(said[:100])}", status_code=303)
     try:
         await ctx.luxalgo_sign_in.finish(code, state, by=client_ip(request, ctx.trusted_proxies), issuer=iss)

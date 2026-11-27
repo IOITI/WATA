@@ -913,10 +913,13 @@ class AgentTools:
         return self._luxalgo
 
     def reviews_may(self, name: str) -> bool:
-        """Whether a review that only reads may call it: what reads (a study that saves nothing included), a chart, its
-        verdict; never a run started, a script saved, a proposal, its memory changed or a conclusion written."""
-        return (name in REVIEW_OWN or name in OPS_TOOLS or name in (LUXALGO_TOOLS, LUXALGO_CALL, LUXALGO_KNOWN, LUXALGO_VIEW)
-                or self._read_only.get(name, False))
+        """
+        Whether a review that only reads may call it: what reads of the research (a study that saves nothing
+        included), a chart, its verdict; never a run started, a script saved, a proposal, its memory changed or a
+        conclusion written. Nor the admin's own reads (its logs, health, changes) or LuxAlgo's: a review's request
+        holds the reviewed party's words, and its verdict line goes back to that party through the journal.
+        """
+        return name in REVIEW_OWN or self._read_only.get(name, False)
 
     def is_read(self, name: str) -> bool:
         """A tool that only reads, and may run beside others: never a study, whose server runs one at a time."""

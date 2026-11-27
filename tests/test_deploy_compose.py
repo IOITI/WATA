@@ -819,12 +819,24 @@ def test_the_database_is_dumped_by_a_container_that_reaches_it_alone(compose_ser
     assert _mount_modes(compose_services["admin1"])["/app/var/lib/backups"] == "ro"
 
 
-def test_the_database_s_password_has_no_fallback_and_the_install_refuses_without_it(compose_services, tmp_path):
-    # A password written in the compose file is public: the database was made with it whenever .env had none.
+def test_the_passwords_have_no_fallback_and_the_install_refuses_without_them(compose_services, tmp_path):
+    # A password written in the compose files is public: the database and the broker were made with it whenever
+    # .env had none.
     compose = open("deploy/docker-compose.yml").read()
-    assert "POSTGRES_PASSWORD:-" not in compose and "POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?" in compose
+    for name in ("POSTGRES_PASSWORD", "RABBITMQ_PASSWORD"):
+        for path in ("deploy/docker-compose.yml", "deploy/docker-compose.override.yml", "deploy/docker-compose_dev.yml",
+                     "deploy/update_rabbit_password.sh"):
+            assert f"{name}:-" not in open(path).read(), (name, path)
+        assert f"{name}=" in open("deploy/.env.example").read()
+    assert "x-common" not in compose
     assert ("POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in /app/wata/.env}"
             in compose_services["postgres1"]["environment"])
+    assert ("RABBITMQ_DEFAULT_PASS=${RABBITMQ_PASSWORD:?set RABBITMQ_PASSWORD in /app/wata/.env}"
+            in compose_services["rabbitmq1"]["environment"])
+    override = yaml.safe_load(open("deploy/docker-compose.override.yml"))
+    assert "RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD:?set RABBITMQ_PASSWORD in /app/wata/.env}" in \
+        override["services"]["setup"]["environment"]
+    assert ': "${RABBITMQ_PASSWORD:?' in open("deploy/update_rabbit_password.sh").read()
     assert "\nPOSTGRES_PASSWORD=\n" in open("deploy/.env.example").read()
     # The example's address carries no password that works: the operator writes theirs.
     with open("etc/config_example.json") as example:
@@ -832,17 +844,26 @@ def test_the_database_s_password_has_no_fallback_and_the_install_refuses_without
 
     # Refused before the script changes anything on the server (its first mkdir, the newest release's name).
     script = open("deploy/install_package.sh").read()
-    refusal = script.index('if [ -z "$POSTGRES_PASSWORD_SET" ]; then')
-    assert refusal < script.index("mkdir -p") and refusal < script.index('> "$APP_BASE_DIR/VERSION"')
+    for name in ("POSTGRES_PASSWORD", "RABBITMQ_PASSWORD"):
+        refusal = script.index(f"required_password {name} ")
+        assert refusal < script.index("mkdir -p") and refusal < script.index('> "$APP_BASE_DIR/VERSION"')
+    functions = script[script.index("env_value() {"):script.index("required_password POSTGRES_PASSWORD ")]
+
+    def run(env: str, call: str):
+        (tmp_path / ".env").write_text(env)
+        return subprocess.run(["bash", "-c", f'APP_BASE_DIR="{tmp_path}"\n{functions}\n{call}'],
+                              capture_output=True, text=True)
+
     # .env read as compose reads it, without running it.
-    function = script[script.index("env_value() {"):script.index("POSTGRES_PASSWORD_SET=")]
     for written, read in [("POSTGRES_PASSWORD=s3cr3t", "s3cr3t"), ('POSTGRES_PASSWORD="a b$c"', "a b$c"),
                           ("POSTGRES_PASSWORD='x'", "x"), ("  POSTGRES_PASSWORD=late  ", "late"),
                           ("POSTGRES_PASSWORD=", ""), ("# POSTGRES_PASSWORD=commented", ""), ("OTHER=1", "")]:
-        (tmp_path / ".env").write_text(f"RABBITMQ_PASSWORD=r\n{written}\n")
-        found = subprocess.run(["bash", "-c", f'APP_BASE_DIR="{tmp_path}"\n{function}\nenv_value POSTGRES_PASSWORD'],
-                               capture_output=True, text=True, check=True).stdout
-        assert found.rstrip("\n") == read, written
+        found = run(f"RABBITMQ_PASSWORD=r\n{written}\n", "env_value POSTGRES_PASSWORD")
+        assert found.stdout.rstrip("\n") == read, written
+    refused = run("RABBITMQ_PASSWORD=r\n", 'required_password POSTGRES_PASSWORD 0 "how"; echo went-on')
+    assert refused.returncode == 1 and "went-on" not in refused.stdout and "POSTGRES_PASSWORD is not set" in refused.stderr
+    taken = run("POSTGRES_PASSWORD=long-and-random\n", 'required_password POSTGRES_PASSWORD 0 "how"; echo went-on')
+    assert taken.returncode == 0 and "went-on" in taken.stdout and taken.stderr == ""
 
 
 def test_the_package_carries_the_backup_script_and_the_server_makes_its_folder():

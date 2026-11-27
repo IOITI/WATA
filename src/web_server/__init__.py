@@ -4,6 +4,7 @@ from fastapi import FastAPI, Request, HTTPException, Depends, Security
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from src.web_server_token import INTERNAL, WEBHOOK, WebServerToken
+from src.vault import loader as vault
 from src.web_server.ignored import IgnoredWebhooks
 from src.web_server.signal_store import SIGNAL_KEY_HEADER, SignalStore, TakenKeys
 import logging
@@ -11,7 +12,7 @@ from src.configuration import ConfigurationManager
 from src.trade.signal_sources import ENGINE, configured as configured_sources, source_of
 from src.schema.validators import check_webhook
 import jsonschema
-from datetime import datetime
+from datetime import datetime, timezone
 import pytz
 import os
 import uuid
@@ -105,9 +106,14 @@ bearer_scheme = HTTPBearer()
 
 
 async def verify_token(token: str, name: str = WEBHOOK):
-    """``token`` against the tokens accepted for ``name`` (the webhook's unless said), in constant time."""
+    """
+    ``token`` against the tokens accepted for ``name`` (the webhook's unless said), in constant time. A token whose
+    row this service could not open at its start accepts nothing (the vault's rule): WebServerToken would otherwise
+    take the token file of before, which holds the token of before any rotation, the same for both names.
+    """
     given = (token or "").encode()
-    if not any(hmac.compare_digest(given, accepted.encode()) for accepted in web_server_token.accepted(name)):
+    accepted_now = () if vault.source(name) == vault.UNREADABLE else web_server_token.accepted(name)
+    if not any(hmac.compare_digest(given, accepted.encode()) for accepted in accepted_now):
         raise HTTPException(status_code=401, detail="Unauthorized")
     return token
 
@@ -115,6 +121,35 @@ async def verify_token(token: str, name: str = WEBHOOK):
 async def verify_bearer_token(credentials: HTTPAuthorizationCredentials = Security(bearer_scheme)):
     """Auth dependency for internal-only endpoints (trader polling, scheduler EOD close)."""
     await verify_token(credentials.credentials, INTERNAL)
+
+
+# How far ahead of the server's clock a signal may be dated: the store keeps the newest of each index by its
+# signal_timestamp, so one dated in the year 9999 would pass every later signal of its index over, closes included.
+# TradingView dates an alert by its bar's open, the TA engine by its bar's close, the scheduler and the admin by now.
+MAX_AHEAD_SECONDS = 300
+
+
+def _too_far_ahead(data: dict, received: datetime) -> bool:
+    try:
+        moment = datetime.strptime(data["signal_timestamp"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except (KeyError, TypeError, ValueError):
+        return False
+    return (moment - received).total_seconds() > MAX_AHEAD_SECONDS
+
+
+def _answer(signal_uuid: str, stored: bool, indice: str) -> JSONResponse:
+    """What a sender is told: stored, or passed over for a newer signal of its index (never said a success)."""
+    if stored:
+        return JSONResponse(content={"status": "success", "signal_uuid": signal_uuid}, status_code=200)
+    return JSONResponse(content={"status": "superseded", "signal_uuid": signal_uuid,
+                                 "reason": f"a newer signal of {indice} is kept"}, status_code=200)
+
+
+def _ahead_refusal(data: dict, received: datetime) -> JSONResponse | None:
+    if not _too_far_ahead(data, received):
+        return None
+    logging.warning(f"Signal refused: its signal_timestamp is ahead of the server's clock: {data}")
+    return JSONResponse(content={"error": "signal_timestamp is ahead of the server's clock"}, status_code=400)
 
 
 def _format_timestamp_ms(dt: datetime) -> str:
@@ -137,25 +172,29 @@ def _record(data: dict, received_timestamp: str, signal_uuid: str) -> dict:
     return record
 
 
-async def _ingest_and_store_signal(data: dict, received_timestamp: str, signal_uuid: str | None = None) -> str:
+async def _ingest_and_store_signal(data: dict, received_timestamp: str,
+                                   signal_uuid: str | None = None) -> tuple[str, bool]:
     """Validate-agnostic signal ingestion shared by /webhook and /internal/signal.
 
     Builds the record stored in SIGNAL_STORE (keyed by indice, latest
     signal_timestamp wins) and returns its signal_uuid: the one given (an
-    internal signal's, kept for its key), else one made here.
+    internal signal's, kept for its key), else one made here; and whether it
+    was stored.
     """
     signal_uuid = signal_uuid or str(uuid.uuid4())
     record = _record(data, received_timestamp, signal_uuid)
 
-    if await SIGNAL_STORE.upsert(record):
+    stored = await SIGNAL_STORE.upsert(record)
+    if stored:
         logging.info(f"Stored signal for indice={data['indice']}: {record}")
-    return signal_uuid
+    return signal_uuid, stored
 
 
 @app.post("/webhook")
 async def webhook(request: Request):
     # Capture the real time this request reached the API, as early as possible.
-    received_timestamp = _format_timestamp_ms(datetime.now(pytz.utc))
+    received = datetime.now(pytz.utc)
+    received_timestamp = _format_timestamp_ms(received)
 
     # Extract the token from the query parameters
     token = request.query_params.get('token')
@@ -178,6 +217,9 @@ async def webhook(request: Request):
     except jsonschema.exceptions.ValidationError as e:
         logging.warning(f"Invalid data received from from {request.client.host}: {e}")
         return JSONResponse(content={"error": "Bad Request"}, status_code=400)
+    refused = _ahead_refusal(data, received)
+    if refused is not None:
+        return refused
     if source_of(SIGNAL_SOURCES, data["indice"]) == ENGINE:
         # Answered, so that TradingView does not report a failure, and counted for the admin's Signals page.
         WEBHOOKS_IGNORED.note(data["indice"], received_timestamp, data.get("action"))
@@ -190,9 +232,9 @@ async def webhook(request: Request):
             status_code=200,
         )
     # TODO : Error handling error 500
-    signal_uuid = await _ingest_and_store_signal(data, received_timestamp)
+    signal_uuid, stored = await _ingest_and_store_signal(data, received_timestamp)
     logging.info(f"Received data from {request.client.host} : {data}")
-    return JSONResponse(content={"status": "success", "signal_uuid": signal_uuid}, status_code=200)
+    return _answer(signal_uuid, stored, data["indice"])
 
 
 @app.post("/internal/signal", include_in_schema=False)
@@ -206,13 +248,17 @@ async def internal_signal(request: Request, _: None = Depends(verify_bearer_toke
     engine's) is stored once: sent again under the same key, by a sender that
     got no answer the first time, it is answered with the signal stored then.
     """
-    received_timestamp = _format_timestamp_ms(datetime.now(pytz.utc))
+    received = datetime.now(pytz.utc)
+    received_timestamp = _format_timestamp_ms(received)
     data = await request.json()
     try:
         check_webhook(data)
     except jsonschema.exceptions.ValidationError as e:
         logging.warning(f"Invalid internal signal payload: {e}")
         return JSONResponse(content={"error": "Bad Request"}, status_code=400)
+    refused = _ahead_refusal(data, received)
+    if refused is not None:
+        return refused
     signal_uuid = str(uuid.uuid4())
     key = request.headers.get(SIGNAL_KEY_HEADER)
     if TakenKeys.valid(key):
@@ -222,14 +268,14 @@ async def internal_signal(request: Request, _: None = Depends(verify_bearer_toke
             logging.info(f"Internal signal sent again under its key: taken once, as {first}: {data}")
             return JSONResponse(content={"status": "success", "signal_uuid": first, "repeated": True}, status_code=200)
     try:
-        signal_uuid = await _ingest_and_store_signal(data, received_timestamp, signal_uuid)
+        signal_uuid, stored = await _ingest_and_store_signal(data, received_timestamp, signal_uuid)
     except Exception:
         # Not stored: its key stands for nothing, and the sender's next attempt is taken as new.
         if TakenKeys.valid(key):
             TAKEN_KEYS.forget(key)
         raise
     logging.info(f"Received internal signal: {data}")
-    return JSONResponse(content={"status": "success", "signal_uuid": signal_uuid}, status_code=200)
+    return _answer(signal_uuid, stored, data["indice"])
 
 
 @app.post("/internal/warm", include_in_schema=False)

@@ -21,29 +21,34 @@ if ! python3 -c 'import sys; sys.exit(sys.version_info < (3, 10))'; then
     echo "Error: watadeploy needs python3 3.10 or newer on the server" >&2
     exit 1
 fi
-# The database's password, from .env: the compose file has no fallback (a password written there is public, and
-# the database was made with it whenever .env had none). Read without running the file; refused before anything
-# changes, the running release staying as it is.
+# The passwords of the database and of RabbitMQ, from .env: the compose files have no fallback (a password written
+# there is public, and the database and the broker were made with it whenever .env had none). Read without running
+# the file; refused before anything changes, the running release staying as it is.
 env_value() {
     local name="$1"
     [ -f "$APP_BASE_DIR/.env" ] || return 0
     sed -n "s/^[[:space:]]*$name=\(.*\)$/\1/p" "$APP_BASE_DIR/.env" | tail -n 1 \
         | sed -e 's/[[:space:]]*$//' -e "s/^\"\(.*\)\"$/\1/" -e "s/^'\(.*\)'$/\1/"
 }
-POSTGRES_PASSWORD_SET="$(env_value POSTGRES_PASSWORD)"
-if [ -z "$POSTGRES_PASSWORD_SET" ]; then
-    echo "Error: POSTGRES_PASSWORD is not set in $APP_BASE_DIR/.env: nothing was changed, the running release stays." >&2
-    echo "  Until v0.104.1 the compose file fell back to a password published with WATA's code, so a database made" >&2
-    echo "  without it in .env has that one. Give the role a new password (docker exec -it postgres psql -U wata" >&2
-    echo "  -c \"ALTER ROLE wata PASSWORD '<new>'\"), then set it as POSTGRES_PASSWORD in .env and in the DSN of" >&2
-    echo "  config.json (postgresql.dsn), with the market closed, and restart the services (watadeploy full)." >&2
-    exit 1
-fi
-# The fallback of before, known by its digest alone: said, not refused (changing it is the operator's, market closed).
-if [ "$(printf '%s' "$POSTGRES_PASSWORD_SET" | sha256sum | cut -c1-64)" = "173111fd2e4299f52b050737f3f375ee4f4b9082143e90745f2ad8ad38a7752f" ]; then
-    echo "WARNING: POSTGRES_PASSWORD in $APP_BASE_DIR/.env is the fallback published with WATA's code until v0.104.1: change it (see .env.example)." >&2
-fi
-unset POSTGRES_PASSWORD_SET
+# A password .env must set: refused without it; the fallback of before, known by its digest alone, said and not
+# refused (changing it is the operator's, with the market closed: every service connects with it).
+required_password() {
+    local name="$1" fallback_digest="$2" how="$3" value
+    value="$(env_value "$name")"
+    if [ -z "$value" ]; then
+        echo "Error: $name is not set in $APP_BASE_DIR/.env: nothing was changed, the running release stays." >&2
+        echo "  Until v0.104.1 the compose files fell back to a password published with WATA's code, so what was made" >&2
+        echo "  without it in .env has that one. $how" >&2
+        exit 1
+    fi
+    if [ "$(printf '%s' "$value" | sha256sum | cut -c1-64)" = "$fallback_digest" ]; then
+        echo "WARNING: $name in $APP_BASE_DIR/.env is the fallback published with WATA's code until v0.104.1: change it. $how" >&2
+    fi
+}
+required_password POSTGRES_PASSWORD 173111fd2e4299f52b050737f3f375ee4f4b9082143e90745f2ad8ad38a7752f \
+    "Give the role a new one (docker exec -it postgres psql -U wata -c \"ALTER ROLE wata PASSWORD '<new>'\"), then set it as POSTGRES_PASSWORD in .env and in the DSN of config.json (postgresql.dsn), with the market closed, and restart the services (watadeploy full)."
+required_password RABBITMQ_PASSWORD 23ab44d7c0b1e1c8d827094ad0080ca7a47c6d2570c5c1104c1a688cc2e3eda7 \
+    "Give the broker's user a new one (docker exec rabbitmq rabbitmqctl change_password trade-app '<new>'), then set it as RABBITMQ_PASSWORD in .env, with the market closed, and restart the services (watadeploy full): the setup service writes it into config.json."
 
 # The deploy's commands, from the release being installed (by its folder: it is not the newest yet).
 deploy() {
@@ -508,7 +513,7 @@ ExecStart=/usr/local/bin/watadeploy check-config
 SuccessExitStatus=1
 EOF
 # The disk sampled every hour (watadisk now), at the lowest priority of processor and disk: what WATA takes of it,
-# kept 14 days in /app/wata/var/lib/disk, which the admin reads (its Disk page, health, Telegram) and the scheduler
+# kept 14 days in /app/wata/var/disk and copied to /app/wata/var/lib/disk, which the admin reads (its Disk page, health, Telegram) and the scheduler
 # too (its morning line while the disk is low).
 cat << 'EOF' > /etc/systemd/system/watadisk.timer
 [Unit]

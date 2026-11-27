@@ -38,6 +38,8 @@ FILE = "skeptic.json"
 KEPT = 400
 SKEPTIC = "skeptic"
 MAX_TITLE = 80
+# Reviews asked in a day (UTC) at most: each spends up to skeptic_max_usd of the month's budget.
+MAX_REVIEWS_A_DAY = 3
 
 
 class SkepticReviews:
@@ -78,6 +80,10 @@ class SkepticReviews:
         if self._market_is_open(config, now):
             return None
         asked = await run_in_threadpool(self.asked)
+        today = stamp(now)[:10]
+        if sum(1 for entry in asked.values() if entry.get("conversation") and str(entry.get("at") or "").startswith(today)) \
+                >= MAX_REVIEWS_A_DAY:
+            return None
         experiments = await run_in_threadpool(self._journal.experiments)
         for experiment in sorted(experiments, key=lambda found: found.get("concluded_at") or ""):
             if (experiment.get("verdict") != "kept" or not experiment.get("candidate") or experiment["id"] in asked

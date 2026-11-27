@@ -30,6 +30,10 @@ def _post_signal(client, indice, signal_timestamp, action="long"):
 
 @pytest.fixture
 def client():
+    # The store is the module's own: what another test kept would pass this one's signals over (answered superseded).
+    from src.web_server import SIGNAL_STORE
+
+    SIGNAL_STORE._signals.clear()
     with patch("fastapi.Request.client") as mock_client:
         mock_client.host = "127.0.0.1"
         with patch("src.web_server.verify_token", return_value=None):

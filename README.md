@@ -384,7 +384,7 @@ After deployment, you need to set up your configuration:
    nano .env
    ```
    
-   Set `RABBITMQ_PASSWORD`, `ACME_EMAIL`, and `API_DOMAIN`. Also set a long, random `POSTGRES_PASSWORD` in `.env`, and the same one in the DSN of `config.json` (`postgresql.dsn`): it is required, and the install and Docker Compose refuse to run without it. Until v0.104.1 the Compose file fell back to a password published with the code; a database made without `POSTGRES_PASSWORD` in `.env` has that one, and needs a new one (`.env.example` says how). Point `API_DOMAIN` to the server so Traefik can issue the HTTPS certificate.
+   Set `RABBITMQ_PASSWORD` (required: the broker's administrator), `ACME_EMAIL`, and `API_DOMAIN`. Also set a long, random `POSTGRES_PASSWORD` in `.env`, and the same one in the DSN of `config.json` (`postgresql.dsn`): it is required, and the install and Docker Compose refuse to run without it. Until v0.104.1 the Compose file fell back to a password published with the code; a database made without `POSTGRES_PASSWORD` in `.env` has that one, and needs a new one (`.env.example` says how). Point `API_DOMAIN` to the server so Traefik can issue the HTTPS certificate.
 
 2. **Copy the Example Config**
    ```bash

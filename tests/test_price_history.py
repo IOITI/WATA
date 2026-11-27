@@ -386,3 +386,45 @@ def test_in_a_directory_of_days_only_the_days_of_the_period_are_opened(tmp_path)
     bars = list(FileBars(str(tmp_path), "us100").bars(_hour(MONDAY, 0), _hour(date(2026, 10, 13), 0)))
 
     assert [bar.start for bar in bars] == [1791792000]
+
+
+def test_what_a_server_answers_beyond_an_hour_s_file_is_never_kept(tmp_path, monkeypatch):
+    # A tiny stream followed by anything at all passed lzma.decompress, and the whole answer was written to disk.
+    hour = _hour(MONDAY, 14)
+    stream = _file([(1000, 18000.1, 18000.0)])
+
+    assert dukascopy.fetch_hour(str(tmp_path), SYMBOL, hour, lambda url: stream + b"\0" * 1_000_000,
+                                sleep=lambda _: None) == dukascopy.FETCHED
+    with open(dukascopy.raw_path(str(tmp_path), SYMBOL, hour), "rb") as kept:
+        assert kept.read() == stream
+    # More ticks than an hour holds, or an answer larger than its file can be: refused, nothing kept.
+    monkeypatch.setattr(dukascopy, "MAX_HOUR_TICK_BYTES", 10)
+    with pytest.raises(dukascopy.CorruptHour, match="more ticks"):
+        dukascopy.decode_hour(stream, hour)
+    monkeypatch.setattr(dukascopy, "MAX_HOUR_BYTES", 100)
+    later = _hour(MONDAY, 15)
+    assert dukascopy.fetch_hour(str(tmp_path), SYMBOL, later, lambda url: b"x" * 101, attempts=1) == dukascopy.FAILED
+    assert not os.path.exists(dukascopy.raw_path(str(tmp_path), SYMBOL, later))
+
+
+def test_a_download_is_read_as_it_comes_and_given_up_past_an_hour_s_size(monkeypatch):
+    import httpx
+
+    monkeypatch.setattr(dukascopy, "MAX_HOUR_BYTES", 1000)
+    sizes = {"/small": 500, "/large": 5000}
+
+    def answer(request):
+        if request.url.path == "/missing":
+            return httpx.Response(404)
+        return httpx.Response(200, content=b"x" * sizes[request.url.path])
+
+    real = httpx.Client
+    monkeypatch.setattr(httpx, "Client", lambda **kwargs: real(transport=httpx.MockTransport(answer), **kwargs))
+    fetch = dukascopy.http_fetch()
+
+    assert fetch("https://datafeed.example/small") == b"x" * 500
+    assert fetch("https://datafeed.example/missing") is None
+    with pytest.raises(dukascopy.TooLarge):
+        fetch("https://datafeed.example/large")
+    with pytest.raises(dukascopy.TooLarge, match="HTTPS"):
+        fetch("http://datafeed.example/small")

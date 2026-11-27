@@ -39,6 +39,28 @@ _READ = 1000
 _NOT_CHANGES = ("configuration saved", "login", "login locked", "webhook address shown", "daily stats requested")
 # A credential's last characters, as the audit names it ("…, ending …a1b2").
 _ENDING = re.compile(r",? ending …[^\s;,]+")
+# A client's address in a log line (the audit's "AUDIT ip=…", a login's "from …"): IPv4, and IPv6 written whole or
+# with "::" (never a time of the day, 14:30:00).
+_HEX = r"[0-9a-fA-F]{1,4}"
+_V4 = r"\d{1,3}(?:\.\d{1,3}){3}"
+_ADDRESS = re.compile(
+    r"(?<![\w.:])(?:"
+    rf"{_V4}(?![\w.])"  # a port may follow: 172.18.0.2:8082
+    rf"|(?:{_HEX}(?::{_HEX}){{0,5}})?::(?:{_HEX}:){{0,5}}{_V4}(?![\w.])"
+    rf"|{_HEX}(?::{_HEX}){{7}}(?![\w.:])"
+    rf"|(?:{_HEX}(?::{_HEX}){{0,6}})?::(?:{_HEX}(?::{_HEX}){{0,6}})?(?![\w.:]))")
+ADDRESS_SAID = "<address>"
+
+
+def masked_line(text: str) -> str:
+    """A line of a log as the agent reads it: no client's address, no credential's last characters."""
+    return _ADDRESS.sub(ADDRESS_SAID, _ENDING.sub(" ending …", str(text)))
+
+
+def masked_log(found: dict) -> dict:
+    """A service's log as read_log gives it, each entry's message masked (masked_line): what reaches Anthropic."""
+    return {**found, "entries": [{**entry, "message": masked_line(entry.get("message") or "")}
+                                 for entry in found.get("entries") or []]}
 # A deploy's steps as the agent reads them, and the open positions' figures.
 _STEP = ("container", "state", "detail")
 _POSITION = (
@@ -169,8 +191,6 @@ def ops_reads(ctx):
     health always, the logs while admin.ai_agent.read_logs, the others as the
     admin has what they read.
     """
-    from functools import partial
-
     from src.admin.agent.tools import OpsReads
     from src.admin.health import collect_health
     from src.admin.logs import read_log
@@ -204,9 +224,12 @@ def ops_reads(ctx):
         return release_now(status, held, ctx.release.waiting(status) if status else {},
                            ctx.release.applying(status) if status else None)
 
+    def logs(service: str, lines: int, level: str | None = None, query: str | None = None) -> dict:
+        return masked_log(read_log(settings.log_path, service, lines, level, query))
+
     return OpsReads(
         health=health,
-        logs=partial(read_log, settings.log_path) if settings.ai_agent.read_logs else None,
+        logs=logs if settings.ai_agent.read_logs else None,
         trading=trading,
         changes=lambda since, until: run_in_threadpool(changes, since, until),
         engine=engine if ctx.ta_scripts is not None else None,

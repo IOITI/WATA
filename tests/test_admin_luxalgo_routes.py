@@ -200,6 +200,18 @@ def test_luxalgo_sends_the_browser_back_to_the_page_saying_what_came_of_it(setup
     assert audited(ctx).count("LuxAlgo account signed in") == 1
 
 
+def test_what_anyone_sends_to_the_callback_is_logged_on_one_line(setup, caplog):
+    # The callback is public: a line break in its error would write a made-up entry of the admin's log.
+    import logging
+
+    client, ctx, _ = setup
+    forged = "x\n2026-11-26 21:00:00,000 - INFO - src.admin.context - AUDIT ip=203.0.113.10 action=login\r\u2028y"
+    with make_client(ctx, "no-interface") as anonymous, caplog.at_level(logging.WARNING):
+        anonymous.get("/api/luxalgo/callback", params={"error": forged}, follow_redirects=False)
+    said = [record.getMessage() for record in caplog.records if "without a code" in record.getMessage()]
+    assert said and all(len(message.splitlines()) == 1 for message in said)
+
+
 def test_the_address_pasted_signs_in_and_signing_out_is_audited(setup):
     client, ctx, _ = setup
     pasted = client.post("/api/luxalgo/sign-in/pasted", json={"address": "https://admin.test/api/luxalgo/callback?"

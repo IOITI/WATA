@@ -22,6 +22,7 @@ their Pine source, market trackers of US public records, and prop-firm tools.
 """
 
 import asyncio
+import asyncio
 import json
 import logging
 import re
@@ -30,6 +31,7 @@ from collections import OrderedDict, deque
 from contextlib import asynccontextmanager
 
 import jsonschema
+from referencing import Registry
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +82,46 @@ _UNKNOWN = re.compile(r"\bUnknown \w+ slug\b", re.IGNORECASE)
 
 class LuxAlgoRefused(Exception):
     """What LuxAlgo, or the admin for it, did not do: said in words, never with a token."""
+
+
+# A schema LuxAlgo lists is its own: checked as large as this at most, its references inside it alone.
+SCHEMA_MOST_CHARACTERS = 200_000
+_REFERENCES = ("$ref", "$dynamicRef", "$recursiveRef")
+
+
+def _outside_reference(schema) -> str | None:
+    """A reference of the schema to anything but itself (``#…``), or None."""
+    waiting = [schema]
+    while waiting:
+        found = waiting.pop()
+        if isinstance(found, dict):
+            for key, value in found.items():
+                if key in _REFERENCES and not (isinstance(value, str) and value.startswith("#")):
+                    return str(value)[:120]
+                waiting.append(value)
+        elif isinstance(found, list):
+            waiting.extend(found)
+    return None
+
+
+def arguments_refusal(tool: str, arguments: dict, schema) -> str | None:
+    """
+    Why ``arguments`` do not fit the schema LuxAlgo lists for ``tool``, or None. Never through the network nor a
+    file: jsonschema's default registry fetches what a ``$ref`` names (urlopen, no time limit, on the admin's loop),
+    so the schema is checked against an empty registry, which retrieves nothing, and a reference outside it refused.
+    """
+    if not isinstance(schema, dict) or len(json.dumps(schema, default=str)) > SCHEMA_MOST_CHARACTERS:
+        return f"{tool}: LuxAlgo lists a schema WATA does not check"
+    outside = _outside_reference(schema)
+    if outside is not None:
+        return f"{tool}: LuxAlgo's schema refers to {outside!r}, outside itself: not followed"
+    try:
+        checker = jsonschema.validators.validator_for(schema, default=jsonschema.Draft202012Validator)
+        checker.check_schema(schema)
+        error = jsonschema.exceptions.best_match(checker(schema, registry=Registry()).iter_errors(arguments))
+    except Exception as e:
+        return f"{tool}: LuxAlgo's schema cannot be checked ({type(e).__name__})"
+    return f"{tool}: {error.message}"[:500] if error is not None else None
 
 
 class LuxAlgoUnknown(LuxAlgoRefused):
@@ -237,10 +279,9 @@ class LuxAlgo:
         listed = (await self.tools()).get(tool)
         if listed is None:
             raise LuxAlgoRefused(f"LuxAlgo does not serve {tool} now")
-        try:
-            jsonschema.validate(arguments, listed["input_schema"])
-        except jsonschema.ValidationError as e:
-            raise LuxAlgoRefused(f"{tool}: {e.message}"[:500]) from None
+        refusal = await asyncio.to_thread(arguments_refusal, tool, arguments, listed["input_schema"])
+        if refusal is not None:
+            raise LuxAlgoRefused(refusal)
         if "slug" in arguments and not SLUG.match(str(arguments["slug"])):
             raise LuxAlgoRefused(f"{tool}: a slug is lowercase letters, digits and dashes")
         token = await self._token()

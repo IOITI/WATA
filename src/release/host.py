@@ -83,6 +83,9 @@ KEPT_REQUESTS = 50
 # mount var/lib whole, so each part is opened without following a link (open_within).
 REQUESTS_IN = ("var", "lib", "admin", "deploy", "requests")
 _NO_FOLLOW = getattr(os, "O_NOFOLLOW", 0)
+# The most read of a file a container writes (config.json, the rules, an agent's meta): far above what they hold.
+MOST_READ_BYTES = 16 * 1024 * 1024
+SCHEDULER_LOG_TAIL_BYTES = 1_048_576
 # Releases kept by prune, the newest first, beside every one still named.
 KEEP_RELEASES = 3
 # Why prune keeps a release (Host.kept_releases), as the Disk page says it (admin_ui/src/features/disk/diskModel.ts).
@@ -168,6 +171,50 @@ def open_within(base: str, parts: tuple[str, ...]) -> int:
         os.close(descriptor)
         raise
     return descriptor
+
+
+def open_plain(path: str, follow: bool = False):
+    """
+    A plain file opened to be read, or None when it is absent, anything but a plain file, or a link when ``follow``
+    is false. Containers write, as root, where watadeploy reads (var/lib, var/log, etc): a named pipe left there
+    would hold it for good, the deploy's lock with it, and a device would be opened. Looked at before it is opened
+    (a pipe opened to be read waits for a writer), and again once open.
+    """
+    try:
+        if not stat.S_ISREG(os.stat(path, follow_symlinks=follow).st_mode):
+            return None
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | (0 if follow else _NO_FOLLOW))
+    except OSError:
+        return None
+    found = os.fdopen(descriptor, "rb")
+    try:
+        if not stat.S_ISREG(os.fstat(found.fileno()).st_mode):
+            found.close()
+            return None
+    except OSError:
+        found.close()
+        return None
+    return found
+
+
+def read_plain(path: str, follow: bool = False, most: int = MOST_READ_BYTES) -> bytes | None:
+    """A plain file read whole (open_plain), None when it is not one or holds more than ``most`` bytes."""
+    found = open_plain(path, follow)
+    if found is None:
+        return None
+    try:
+        with found:
+            data = found.read(most + 1)
+    except OSError:
+        return None
+    return data if len(data) <= most else None
+
+
+def _json_of(data: bytes | None):
+    try:
+        return json.loads(data.decode("utf-8")) if data is not None else None
+    except (UnicodeDecodeError, ValueError):
+        return None
 
 
 def _write_atomically(path: str, text: str, mode: int = 0o644) -> None:
@@ -475,11 +522,9 @@ class Host:
     # ── what runs ──
 
     def _config(self) -> dict:
-        try:
-            with open(self.layout.config, encoding="utf-8") as config_file:
-                return json.load(config_file)
-        except (OSError, ValueError):
-            return {}
+        # The admin writes etc/: read as a plain file (a link followed: the file is the operator's).
+        config = _json_of(read_plain(self.layout.config, follow=True))
+        return config if isinstance(config, dict) else {}
 
     def manifest(self, image_id: str) -> dict:
         """What an image runs, read once and kept by its id."""
@@ -620,9 +665,10 @@ class Host:
         folder = self.layout.host_path(((config.get("admin") or {}).get("persistant") or {}).get(
             "ta_path", "/app/var/lib/admin/ta"))
         try:
-            with open(os.path.join(folder, "rules.json"), encoding="utf-8") as rules_file:
-                rules = json.load(rules_file).get("rules") or []
-        except (OSError, ValueError, AttributeError):
+            rules = _json_of(read_plain(os.path.join(folder, "rules.json"))).get("rules") or []
+        except AttributeError:
+            return 0
+        if not isinstance(rules, list):
             return 0
         return sum(1 for rule in rules if isinstance(rule, dict) and rule.get("mode") == "live")
 
@@ -636,10 +682,9 @@ class Host:
             return 0
         for name in names:
             try:
-                with open(os.path.join(folder, name, "meta.json"), encoding="utf-8") as meta:
-                    if json.load(meta).get("status") in AGENT_UNDER_WAY:
-                        found += 1
-            except (OSError, ValueError, AttributeError):
+                if _json_of(read_plain(os.path.join(folder, name, "meta.json"))).get("status") in AGENT_UNDER_WAY:
+                    found += 1
+            except AttributeError:
                 continue
         return found
 
@@ -685,10 +730,13 @@ class Host:
     def _scheduler_line(self) -> str | None:
         folder, markers, _ = SCHEDULER_LOG
         path = os.path.join(self.layout.base, "var", "log", folder, f"{folder}.log")
+        log = open_plain(path)
+        if log is None:
+            return None
         try:
-            with open(path, "rb") as log:
+            with log:
                 log.seek(0, os.SEEK_END)
-                log.seek(max(log.tell() - 1_048_576, 0))
+                log.seek(max(log.tell() - SCHEDULER_LOG_TAIL_BYTES, 0))
                 lines = log.read().decode("utf-8", errors="replace").splitlines()
         except OSError:
             return None

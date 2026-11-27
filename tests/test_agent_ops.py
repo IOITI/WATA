@@ -8,6 +8,7 @@ one that fails is said to the agent as a refusal.
 
 import asyncio
 import json
+import os
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -143,6 +144,29 @@ def test_the_reads_offered_follow_what_the_admin_has(tmp_path):
 
     assert bare.offered() == ["ops_health", "ops_trading_now", "ops_changes"]
     assert full.offered() == list(OPS_TOOLS)
+
+
+def test_the_logs_the_agent_reads_name_no_address_nor_a_credential_s_ending(tmp_path):
+    # What the agent reads goes to Anthropic: the audit's lines hold the operator's address and a credential's end.
+    from src.admin.logs import log_file_path
+
+    path = log_file_path(str(tmp_path), "wata-admin")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as log:
+        log.write("2026-11-26 21:00:00,000 - INFO - src.admin.context - AUDIT ip=203.0.113.7 action=login\n"
+                  "2026-11-26 21:00:01,000 - INFO - src.admin.context - AUDIT ip=2001:db8::7 action=credential set "
+                  "Webhook token, ending …a1b2; read by web_server\n"
+                  "2026-11-26 21:00:02,000 - WARNING - src.admin.routers.session - Failed admin login from ::ffff:10.0.0.1\n"
+                  "2026-11-26 21:00:03,000 - INFO - src.admin.x - Bars of 14:30:00 read from 172.18.0.5:5432\n")
+    reads = ops_reads(SimpleNamespace(settings=SimpleNamespace(log_path=str(tmp_path),
+                                                               ai_agent=SimpleNamespace(read_logs=True)),
+                                      ta_scripts=None, release=None))
+
+    said = [entry["message"] for entry in reads.logs("wata-admin", 100, None, None)["entries"]]
+
+    assert said == ["AUDIT ip=<address> action=login",
+                    "AUDIT ip=<address> action=credential set Webhook token ending …; read by web_server",
+                    "Failed admin login from <address>", "Bars of 14:30:00 read from <address>:5432"]
 
 
 def test_what_changed_is_read_from_the_journal_the_audit_and_watadeploy_s_status(tmp_path):

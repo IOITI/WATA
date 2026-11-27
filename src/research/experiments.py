@@ -43,6 +43,14 @@ from datetime import date, datetime, timedelta, timezone
 
 VERDICTS = ("kept", "rejected", "inconclusive")
 MAX_TEXT = 2000
+# A title and a family are named on one line, shorter: they are said in the AI agent's briefs and reviews.
+MAX_TITLE = 200
+MAX_FAMILY = 80
+# What the journal takes, so that no caller makes it grow without end (every tool reads it whole): open experiments
+# at once, experiments opened in a day (UTC), and the file's size, past which nothing more is written.
+MAX_OPEN = 100
+MAX_OPENED_A_DAY = 50
+MAX_JOURNAL_BYTES = 32 * 1024 * 1024
 # The most configurations written down at once as tried elsewhere.
 MAX_TRIALS_ELSEWHERE = 100_000
 # The days an experiment's idea came from, at most: a hypothesis drawn from a few losing days names them.
@@ -170,6 +178,13 @@ class ExperimentJournal:
 
     def _append(self, event: dict) -> dict:
         os.makedirs(os.path.dirname(self.journal_path) or ".", exist_ok=True)
+        try:
+            size = os.path.getsize(self.journal_path)
+        except OSError:
+            size = 0
+        if size > MAX_JOURNAL_BYTES:
+            raise JournalError(f"The experiment journal holds {size // (1024 * 1024)} MB, past the "
+                               f"{MAX_JOURNAL_BYTES // (1024 * 1024)} MB it takes: nothing more is written to it")
         with self._lock, open(self.journal_path, "a", encoding="utf-8") as out_file:
             out_file.write(json.dumps({**event, "at": _stamp(self._clock())}) + "\n")
         return event
@@ -198,6 +213,15 @@ class ExperimentJournal:
             raise JournalError("An experiment has a title, a hypothesis and a family")
         if any(len(text) > MAX_TEXT for text in [*texts, plan or ""]):
             raise JournalError(f"An experiment's texts are {MAX_TEXT} characters at most")
+        if len(texts[0]) > MAX_TITLE or len(texts[2]) > MAX_FAMILY or any(
+                len(text.splitlines()) > 1 for text in (texts[0], texts[2])):
+            raise JournalError(f"A title is one line of {MAX_TITLE} characters at most, a family one of {MAX_FAMILY}")
+        experiments = self.experiments()
+        if sum(1 for experiment in experiments if experiment["verdict"] is None) >= MAX_OPEN:
+            raise JournalError(f"{MAX_OPEN} experiments are open: conclude some before opening another")
+        today = datetime.fromtimestamp(self._clock(), timezone.utc).date().isoformat()
+        if sum(1 for experiment in experiments if str(experiment.get("opened_at") or "").startswith(today)) >= MAX_OPENED_A_DAY:
+            raise JournalError(f"{MAX_OPENED_A_DAY} experiments were opened today (UTC): open more tomorrow")
         # A day ahead of UTC's: the trading timezone's day may have begun already.
         days = checked_days(motivated_by, datetime.fromtimestamp(self._clock(), timezone.utc).date() + timedelta(days=1))
         bounds = checked_criteria(criteria)

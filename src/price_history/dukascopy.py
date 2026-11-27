@@ -55,6 +55,10 @@ REQUEST_TIMEOUT_SECONDS = 15.0
 # A day in which this many hours were asked for and none was answered: the
 # server is not answering this address any more, and asking on makes it last.
 UNANSWERED_HOURS_TO_STOP = 3
+# What an hour's file may take: a busy hour of the index is a few hundred kilobytes, its ticks a few megabytes. A
+# server that answers more (or a stream followed by anything at all) would fill the disk the database writes to.
+MAX_HOUR_BYTES = 16 * 1024 * 1024
+MAX_HOUR_TICK_BYTES = 128 * 1024 * 1024
 
 # One tick: milliseconds into the hour, ask, bid, then the two volumes.
 _TICK = struct.Struct(">IIIff")
@@ -76,6 +80,10 @@ class CorruptHour(Exception):
     """What was received is not a tick file."""
 
 
+class TooLarge(Exception):
+    """An answer larger than an hour's file can be: never kept."""
+
+
 class Tick(NamedTuple):
     at: float
     bid: float
@@ -87,14 +95,41 @@ def hour_url(symbol: str, hour: datetime) -> str:
     return f"{BASE_URL}/{symbol}/{hour.year}/{hour.month - 1:02d}/{hour.day:02d}/{hour.hour:02d}h_ticks.bi5"
 
 
+def _decompressed(raw: bytes) -> tuple[bytes, int]:
+    """
+    The ticks' bytes of an hour's file, at most MAX_HOUR_TICK_BYTES, and how many of the file's bytes their stream
+    took: what follows the stream is never read (``lzma.decompress`` passes over it, and it was kept with the hour).
+    """
+    decompressor = lzma.LZMADecompressor()
+    try:
+        data = decompressor.decompress(raw, max_length=MAX_HOUR_TICK_BYTES + 1)
+    except lzma.LZMAError as e:
+        raise CorruptHour(str(e)) from e
+    if len(data) > MAX_HOUR_TICK_BYTES:
+        raise CorruptHour(f"more ticks than an hour holds (over {MAX_HOUR_TICK_BYTES // (1024 * 1024)} MB)")
+    if not decompressor.eof:
+        raise CorruptHour("Compressed data ended before the end-of-stream marker was reached")
+    return data, len(raw) - len(decompressor.unused_data)
+
+
+def kept_bytes(raw: bytes, hour: datetime) -> bytes:
+    """What is kept of a file received for an hour: its stream alone, once its ticks are read (CorruptHour otherwise)."""
+    if not raw:
+        return raw
+    data, used = _decompressed(raw)
+    if len(data) % _TICK.size:
+        raise CorruptHour(f"ticks of {_TICK.size} bytes, and {len(data)} bytes are no whole number of them")
+    return raw[:used]
+
+
 def decode_hour(raw: bytes, hour: datetime, price_scale: int = PRICE_SCALE) -> list[Tick]:
     """The ticks of one hourly file, oldest first. An empty file is an hour without a tick."""
     if not raw:
         return []
+    data, _ = _decompressed(raw)
     try:
-        data = lzma.decompress(raw)
         records = list(_TICK.iter_unpack(data))
-    except (lzma.LZMAError, struct.error) as e:
+    except struct.error as e:
         raise CorruptHour(str(e)) from e
     start = hour.timestamp()
     return [Tick(start + ms / 1000, bid / price_scale, ask / price_scale) for ms, ask, bid, _, _ in records]
@@ -146,11 +181,19 @@ def http_fetch(timeout: float = REQUEST_TIMEOUT_SECONDS) -> Fetch:
     client = httpx.Client(timeout=timeout, headers={"User-Agent": "Mozilla/5.0"}, follow_redirects=True)
 
     def fetch(url: str) -> bytes | None:
-        response = client.get(url)
-        if response.status_code == 404:
-            return None
-        response.raise_for_status()
-        return response.content
+        # Read as it comes, and given up past what an hour's file can be: never a whole answer of any size.
+        with client.stream("GET", url) as response:
+            if response.status_code == 404:
+                return None
+            response.raise_for_status()
+            if response.url.scheme != "https":
+                raise TooLarge(f"sent elsewhere than over HTTPS: {response.url.host}")
+            body = bytearray()
+            for chunk in response.iter_bytes():
+                body += chunk
+                if len(body) > MAX_HOUR_BYTES:
+                    raise TooLarge(f"an answer of more than {MAX_HOUR_BYTES // (1024 * 1024)} MB")
+            return bytes(body)
 
     return fetch
 
@@ -179,8 +222,11 @@ def fetch_hour(
             content = fetch(url)
             if content is None:
                 return UNPUBLISHED
-            # Checked before it is kept: an error page saved as an hour would never be asked for again.
-            decode_hour(content, hour)
+            # Checked before it is kept: an error page saved as an hour would never be asked for again. Its stream
+            # alone, of a bounded size (whatever a fetch hands over).
+            if len(content) > MAX_HOUR_BYTES:
+                raise TooLarge(f"an answer of {len(content)} bytes")
+            content = kept_bytes(content, hour)
         except Exception:
             continue
         _save_bytes(path, content)

@@ -21,6 +21,8 @@ from src.admin.events import EventHub
 from src.admin.mcp_server.limits import McpLimits
 
 logger = logging.getLogger(__name__)
+# What an audit's announcement holds at most: Telegram takes 4,096 characters a message.
+TELEGRAM_MOST_CHARACTERS = 3500
 
 NOTIFICATION_TIMEOUT_SECONDS = 5
 # The reverse proxy in front of the admin: the Traefik container of docker-compose.yml.
@@ -249,8 +251,14 @@ class AdminContext:
         if self.notifier is None:
             return
         lines = [f"🛠 WATA Admin: {action}", detail, f"From {ip}"]
+        text = "\n".join(line for line in lines if line)
+        if len(text) > TELEGRAM_MOST_CHARACTERS:
+            # Telegram refuses a longer message, and the telegram service drops what it refuses: the announcement
+            # would never arrive. Its start and its address kept.
+            tail = f"… (cut: the whole entry is in the audit trail)\nFrom {ip}"
+            text = text[:TELEGRAM_MOST_CHARACTERS - len(tail)] + tail
         # In the background: a slow RabbitMQ must not hold up the operator's request.
-        task = asyncio.create_task(self._notify("\n".join(line for line in lines if line)))
+        task = asyncio.create_task(self._notify(text))
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
 

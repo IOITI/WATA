@@ -62,6 +62,16 @@ def test_the_entries_are_listed_without_their_text_kind_by_kind(research, memory
     assert refused and "preference, lesson, finding, reference" in wrong
 
 
+def test_a_pause_is_said_with_its_moment_never_the_operators_address(research, memory):
+    research = dataclasses.replace(research, memory=memory)
+    memory.set_pause(OPERATOR, True)
+
+    listed, error = called(research, "memory_list", {})
+
+    assert not error and set(json.loads(listed)["paused"]) == {"since"}
+    assert "10.8.0.2" not in listed
+
+
 def test_an_entry_is_read_whole_and_who_read_it_is_noted_without_a_change(research, memory):
     research = dataclasses.replace(research, memory=memory)
     seq = memory.seq()

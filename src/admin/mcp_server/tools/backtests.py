@@ -453,7 +453,7 @@ def register_writing(server, research) -> None:
                    description=START_DESCRIPTION)
     async def backtest_start(experiment_id: str, request: dict, lockbox_final: bool = False,
                              idempotency_key: str = "") -> dict:
-        experiment = guards.open_experiment(journal, experiment_id)
+        experiment = await run_in_threadpool(guards.open_experiment, journal, experiment_id)
         if idempotency_key and idempotency_key in asked:
             return compacted(_run_line(await run_in_threadpool(research.service().get, asked[idempotency_key])))
         body = dict(request)
@@ -463,7 +463,7 @@ def register_writing(server, research) -> None:
         guards.check_room(research, guards.cost_of(body, await run_in_threadpool(guards.trading_days, research, first, last)))
         lockbox = guards.lockbox_of(journal, first, last, lockbox_final)
         if isinstance(body.get("sweep"), dict):
-            body["sweep"] = {**body["sweep"], "trials_before": journal.family_trials(experiment["family"])}
+            body["sweep"] = {**body["sweep"], "trials_before": await run_in_threadpool(journal.family_trials, experiment["family"])}
         made = await backtest_requests.ask_backtest(
             research.queries, research.service(), body, made_by=CLAUDE, made_via=made_via(),
             experiment=experiment_id, lockbox=lockbox,
@@ -490,7 +490,7 @@ def register_writing(server, research) -> None:
         entries kept (one trial): part decomposition says what the caps add and the tail they hide."""
         if kind not in DERIVED:
             raise Refused(f"kind is one of {', '.join(DERIVED)}")
-        experiment = guards.open_experiment(journal, experiment_id)
+        experiment = await run_in_threadpool(guards.open_experiment, journal, experiment_id)
         service = research.service()
         run = await run_in_threadpool(service.get, run_id)
         first, last = guards.period_of(run.get("request") or {})
@@ -531,7 +531,7 @@ def register_writing(server, research) -> None:
         body["name"] = f"Neighbours of {parameter}: {run.get('name') or run_id}"[:120]
         body["sweep"] = {
             "axes": [{"kind": "input" if parameter.startswith("in_") else "setting", "name": parameter, "values": chosen}],
-            "trials_before": journal.family_trials(experiment["family"]),
+            "trials_before": await run_in_threadpool(journal.family_trials, experiment["family"]),
         }
         body.pop("baseline", None)
         guards.check_room(research, guards.cost_of(body, days))

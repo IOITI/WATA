@@ -5,7 +5,7 @@ services:
     container_name: 'rabbitmq'
     environment:
       - RABBITMQ_DEFAULT_USER=trade-app
-      - RABBITMQ_DEFAULT_PASS=pykvys-9nixqo-cuqvYt
+      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_PASSWORD:?set RABBITMQ_PASSWORD in .env}
     volumes:
         - ../var/lib/rabbitmq:/var/lib/rabbitmq/
         - ../var/log/rabbitmq:/var/log/rabbitmq

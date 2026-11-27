@@ -997,6 +997,16 @@ def test_a_burst_of_logins_sent_at_once_is_held_to_the_limit(ctx, tmp_path, monk
     assert ctx.throttle._under_way == {}
 
 
+def test_what_anyone_sends_to_saxos_callback_is_logged_on_one_line(anonymous, caplog):
+    # The callback is public: a line break in its error would write a made-up entry of the admin's log.
+    forged = "x\n2026-11-26 21:00:00,000 - INFO - src.admin.context - AUDIT ip=203.0.113.10 action=login\r\u2028y"
+    with caplog.at_level(logging.WARNING):
+        answer = anonymous.get("/api/saxo/callback", params={"error": forged}, follow_redirects=False)
+    assert answer.status_code == 303
+    said = [record.getMessage() for record in caplog.records if "without a code" in record.getMessage()]
+    assert said and all(len(message.splitlines()) == 1 for message in said)
+
+
 def test_a_caller_that_is_not_the_proxy_cannot_choose_its_address(ctx, tmp_path):
     # Another container of the network reaching the admin port directly.
     with make_client(ctx, tmp_path / "no-interface", peer=OTHER_CONTAINER) as direct:
@@ -1826,6 +1836,32 @@ def test_audit_announces_the_action_on_telegram_without_blocking(ctx):
     assert "manual signal long" in messages[0]
     assert "indice=us100" in messages[0]
     assert "203.0.113.9" in messages[0]
+
+
+def test_an_announcement_stays_within_what_telegram_takes(ctx):
+    # Telegram refuses a message over 4,096 characters, and the telegram service drops what it refuses.
+    from src.admin.routers.config import changes_said
+
+    messages = []
+
+    async def notifier(message):
+        messages.append(message)
+
+    class Request:
+        headers = {"x-forwarded-for": "203.0.113.9"}
+        client = type("Client", (), {"host": PROXY})
+
+    said = changes_said({"changes": [{"path": "trade.config." + "k" * 5000}, {"path": "trade.config.x"}]})
+    assert len(said) < 300 and "trade.config.x" in said
+
+    async def scenario():
+        ctx.notifier = notifier
+        ctx.audit(Request(), "configuration saved", "x" * 10_000)
+        await asyncio.sleep(0.01)
+
+    asyncio.run(scenario())
+    assert len(messages[0]) <= 3500 and "configuration saved" in messages[0] and messages[0].endswith("203.0.113.9")
+    assert "x" * 10_000 in ctx.audit_log.read(1)[0]["detail"]
 
 
 def test_audit_survives_a_failing_notifier(ctx):

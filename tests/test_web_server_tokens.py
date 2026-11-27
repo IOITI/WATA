@@ -74,6 +74,37 @@ def test_a_service_of_before_reads_the_token_file_while_the_token_has_no_row(cli
     assert client.get("/latest-signals", headers={"Authorization": "Bearer the-file-token-0123456789abcdefghi"}).status_code == 200
 
 
+def test_a_signal_dated_ahead_of_the_clock_is_refused_and_one_passed_over_is_no_success(client):
+    # Kept, a signal of the year 9999 would pass every later signal of its index over, closes included.
+    from src.web_server import SIGNAL_STORE
+
+    SIGNAL_STORE._signals.clear()
+    ahead = {**SIGNAL, "indice": "n/a", "action": "close-position", "signal_timestamp": "9999-12-31T23:59:59Z"}
+    refused = client.post(f"/webhook?token={WEBHOOK}", json=ahead)
+    assert refused.status_code == 400 and "ahead" in refused.json()["error"]
+    internal = client.post("/internal/signal", json=ahead, headers={"Authorization": f"Bearer {INTERNAL}"})
+    assert internal.status_code == 400
+    assert "n/a" not in SIGNAL_STORE._signals
+
+    # A few minutes ahead (clocks apart) is taken; an older one is said to be passed over.
+    soon = datetime.now(timezone.utc) + timedelta(minutes=2)
+    assert client.post(f"/webhook?token={WEBHOOK}", json={
+        **SIGNAL, "signal_timestamp": soon.strftime("%Y-%m-%dT%H:%M:%SZ")}).json()["status"] == "success"
+    older = client.post("/internal/signal", json=SIGNAL, headers={"Authorization": f"Bearer {INTERNAL}"})
+    assert older.status_code == 200 and older.json()["status"] == "superseded" and older.json()["signal_uuid"]
+    SIGNAL_STORE._signals.clear()
+
+
+def test_a_row_that_cannot_be_opened_is_no_token_never_the_file_of_before(client, monkeypatch):
+    # The file holds the token of before any rotation, the same for both: it must not be accepted again.
+    loader.forget()
+    loader._sources.update({"webhook.token": loader.UNREADABLE, "internal.token": loader.UNREADABLE})
+    monkeypatch.setattr(web_server_token, "stored_token", lambda: "the-file-token-0123456789abcdefghi")
+
+    assert client.post("/webhook?token=the-file-token-0123456789abcdefghi", json=SIGNAL).status_code == 401
+    assert client.get("/latest-signals", headers={"Authorization": "Bearer the-file-token-0123456789abcdefghi"}).status_code == 401
+
+
 # ── /internal/warm: a signal's way rehearsed, nothing stored ──
 
 def _polled(client, after=0):

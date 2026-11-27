@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Set default password if not provided
-RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD:-pykvys-9nixqo-cuqvYt}
+# Given by the compose file from /app/wata/.env: no fallback (a password written here is public).
+: "${RABBITMQ_PASSWORD:?set RABBITMQ_PASSWORD in /app/wata/.env}"
 WATA_CONFIG_FILE="/app/etc/config.json"
 
 # Update the RabbitMQ password in config.json

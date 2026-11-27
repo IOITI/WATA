@@ -28,7 +28,8 @@ async def callback(request: Request, code: str | None = None, state: str | None 
     ctx = request.app.state.ctx
     if error or not code or not state:
         said = error or "no code"
-        logger.warning("Saxo sent the browser back without a code (%s)", said[:100])
+        # On one line: anyone can call this address, and a line break would write an entry of its own in the log.
+        logger.warning("Saxo sent the browser back without a code (%s)", " ".join(said.split())[:100])
         return RedirectResponse(f"/system?saxo=refused&why={urllib.parse.quote(said[:100])}", status_code=303)
     try:
         environment = await ctx.saxo.hand_over(code, state=state, by=client_ip(request, ctx.trusted_proxies))
