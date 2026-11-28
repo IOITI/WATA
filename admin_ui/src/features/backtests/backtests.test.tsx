@@ -370,6 +370,8 @@ function serve() {
             return json({ items: [day(), day({ day: '2026-10-15', day_percent: 1.7 }), day({ day: '2026-10-16', status: 'no_recorded_turbos', trades: 0, recorded: null })] })
           case 'trades':
             return json({ items: day14 === null || day14 === '2026-10-14' ? [trade()] : [] })
+          case 'projection':
+            return json({ usable: false, why_not: '2 day(s) to draw from: 5 at least are needed, and many more to believe it', run_id: match[1] })
           case 'signals':
             return json({
               items: [
@@ -1256,8 +1258,8 @@ describe('a run', () => {
     const parts = nav.getAllByRole('link').map((link) => [link.textContent, link.getAttribute('href')])
     expect(parts).toEqual([
       ['01Verdict', '#verdict'], ['02Trust', '#trust'], ['03Edge', '#edge'], ['04Stress', '#stress'], ['05Made-up turbos', '#model-check'],
-      ['06Day after day', '#curves'], ['07Why', '#why'], ['08Where it comes from', '#breakdowns'], ['09Winners and losers', '#autopsy'],
-      ['10The day’s caps', '#caps'], ['11Trades, signals, days', '#tables'], ['12What it ran', '#setup'],
+      ['06Day after day', '#curves'], ['07At this pace', '#pace'], ['08Why', '#why'], ['09Where it comes from', '#breakdowns'],
+      ['10Winners and losers', '#autopsy'], ['11The day’s caps', '#caps'], ['12Trades, signals, days', '#tables'], ['13What it ran', '#setup'],
     ])
     for (const [, href] of parts) expect(document.getElementById((href as string).slice(1))).not.toBeNull()
     // Named by the part alone; the first is the current one until the page scrolls.

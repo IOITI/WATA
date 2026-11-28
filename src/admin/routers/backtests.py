@@ -13,14 +13,15 @@ reads the recorded turbos through a read-only connection of its own.
 """
 
 import time
-from datetime import date
+from datetime import date, datetime
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+import pytz
 from starlette.concurrency import run_in_threadpool
 
-from src.admin import backtest_requests, propfirm_check, run_to_live, sweep_plateau
+from src.admin import backtest_requests, propfirm_check, run_projection, run_to_live, sweep_plateau
 from src.admin.autopsy import run_autopsy
 from src.admin.auth import client_ip, require_session
 from src.admin.backtests import RUN_ID
@@ -496,6 +497,30 @@ async def propfirms(run_id: str, service=Depends(backtests)):
         except propfirm_check.NotCheckable as e:
             return {"kept": kept, "figures": None, "refused": str(e)}
         return {"kept": kept, "figures": said, "refused": None}
+
+    return await run_in_threadpool(read)
+
+
+@router.get("/{run_id}/projection")
+async def projection(run_id: str, request: Request, service=Depends(backtests)):
+    """
+    What the run would make at its own pace over the trading days to come, two years at most: its account's growth
+    day by day, and those days without the US market's holidays and early closes and the configuration's closed dates
+    (src/admin/run_projection.py). The page draws the paths. A run that has none says why (``usable`` false).
+    """
+    ctx = request.app.state.ctx
+    rules = ctx.config_manager.get_config_value("trade.rules", []) or []
+    now = datetime.now(pytz.utc)
+
+    def read() -> dict:
+        run = service.get(run_id)
+        try:
+            run_projection.check_projectable(run)
+            return run_projection.run_projection(
+                run, service.days(run_id), service.trades(run_id), service.settings_of(run_id), rules,
+                ctx.settings.timezone, now, signals_of=lambda: service.signals(run_id))
+        except run_projection.NotProjectable as e:
+            return {"usable": False, "why_not": str(e), "run_id": run_id}
 
     return await run_in_threadpool(read)
 

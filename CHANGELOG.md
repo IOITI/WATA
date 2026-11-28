@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.108.0 - A run's earnings at this pace, up to two years
+
+**Release date:** 2026-11-28
+
+A backtest said how it did over its own days, and one figure of where that leads ("A year at this pace"): 252 days, no calendar, and each trade counted as the whole stake rather than what the account made.
+
+- **"At this pace" on a run's page** (after "Day after day"): what the account would make over the trading days to come, 3 months, 6 months, 1 year or 2 years, in money or in percent of the start. 2,000 paths, each a day of the run drawn again for each trading day to come, seeded by the run: its average day, the band of half and of nine in ten of the paths, the share ending below the start (and below half of it), the deepest fall on the way, and each day off by name.
+- **The days WATA will trade**: weekends, the US market's holidays and early closes, and the closed dates of config.json are left out; an early close draws a morning of the run's days (its trades decided before entries end that day).
+- **The account's pace, not the turbo percent**: each day's growth is what the trades opened that day did to the account (a position held overnight stays on its opening day). The run's tested days the US market was closed (turbos are recorded then, every entry refused: a day at nothing), its own closed dates, and the days after the account guard paused entries or the account was emptied are left out of it, and said.
+- **The start and the stake**: the run's capital, another amount, or the account's balance in a click; an optional cap on the stake, past which the account grows by the cap's result alone, the rest set aside. A start far from the run's capital is said to weigh its fixed costs otherwise.
+- **2028 in the US market calendar**: NYSE's nine closed days and two early closes (3 July, 24 November), from the announcement 2026 and 2027 came from. The calendar is known until 2028-12-31; its upkeep warning moves a year. A year the file does not hold yet is worked out by NYSE's rules for the projection alone, and said estimated; a test holds those rules to every day of the file.
+- `GET /api/backtests/{id}/projection` (`src/admin/run_projection.py`, `src/admin/us_market_rules.py`). No backtest turns stale. The calendar file changes every container that reads it (the trader, the position monitor, the scheduler, the telegram service, the price recorder, the admin): a deploy for a closed market.
+
 ## v0.107.0 - The US releases on the Market calendar, applied or not
 
 **Release date:** 2026-11-28

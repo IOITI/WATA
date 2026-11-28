@@ -103,18 +103,33 @@ def _us_days(rules: list, zone: str, today: date, add) -> tuple[dict, object]:
     return said, calendar
 
 
-def _config_days(rules: list, calendar, add) -> dict:
+def _written_closed_dates(rules: list) -> list:
     written = _rule_config(rules, "market_closed_dates").get("market_closed_dates") or []
-    unreadable = []
-    for text in written if isinstance(written, list) else []:
+    return written if isinstance(written, list) else []
+
+
+def config_closed_dates(rules: list) -> tuple[set[date], list[str]]:
+    """The configuration's ``market_closed_dates`` (DD/MM/YYYY, as the trader reads them), and those it cannot read."""
+    days, unreadable = set(), []
+    for text in _written_closed_dates(rules):
         day = _config_date(text)
         if day is None:
             unreadable.append(str(text))
+        else:
+            days.add(day)
+    return days, unreadable
+
+
+def _config_days(rules: list, calendar, add) -> dict:
+    written = _written_closed_dates(rules)
+    for text in written:
+        day = _config_date(text)
+        if day is None:
             continue
         # The catalog's caveat: list there only what the US calendar lacks.
         also_us = calendar is not None and calendar.closed_on(day) is not None
         add(day, {"kind": CONFIG_CLOSED, "written": text, "also_us": also_us})
-    return {"count": len(written) if isinstance(written, list) else 0, "unreadable": unreadable}
+    return {"count": len(written), "unreadable": config_closed_dates(rules)[1]}
 
 
 def _release_days(rules: list, today: date, add) -> dict:

@@ -280,6 +280,7 @@ AUTHENTICATED_ROUTES = [
     ("DELETE", "/api/agent/queue/q0a1b2c3d"),
     ("GET", "/api/backtests/20261012-213045-a1b2c3/propfirms"),
     ("POST", "/api/backtests/20261012-213045-a1b2c3/propfirms"),
+    ("GET", "/api/backtests/20261012-213045-a1b2c3/projection"),
     ("GET", "/api/luxalgo/families"),
     ("GET", "/api/luxalgo/indicators"),
     ("GET", "/api/luxalgo/search"),

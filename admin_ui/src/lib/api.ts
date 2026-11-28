@@ -36,6 +36,7 @@ import type {
   BacktestFate,
   BacktestOptions,
   BacktestPaper,
+  BacktestProjection,
   BacktestReconciliation,
   BacktestRemakePreview,
   BacktestRemaking,
@@ -541,6 +542,8 @@ export const api = {
   stressBacktest: (runId: string, kind: 'fills' | 'noise' = 'fills') =>
     request<BacktestRun>('POST', `/api/backtests/${encodeURIComponent(runId)}/stress${kind === 'noise' ? '?kind=noise' : ''}`),
   modelCheckBacktest: (runId: string) => request<BacktestRun>('POST', `/api/backtests/${encodeURIComponent(runId)}/model-check`),
+  /** The run's pace and the trading days to come, two years: what "At this pace" draws. */
+  backtestProjection: (runId: string) => request<BacktestProjection>('GET', `/api/backtests/${encodeURIComponent(runId)}/projection`),
   /** The run's last check against funded challenges, and its figures as they would be sent. */
   propFirms: (runId: string) => request<PropFirmState>('GET', `/api/backtests/${encodeURIComponent(runId)}/propfirms`),
   /** The run's trades as R-multiples sent to LuxAlgo's prop-firm simulator: only figures leave. */

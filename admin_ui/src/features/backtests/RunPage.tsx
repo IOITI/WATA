@@ -59,6 +59,7 @@ import { ModelCheckPanel } from './ModelCheckPanel'
 import { paperRunLine, runParents } from './paperModel'
 import { choiceTrust } from './robustness'
 import { PropFirmPanel } from './PropFirmPanel'
+import { ProjectionPanel } from './ProjectionPanel'
 import { StressPanel } from './StressPanel'
 import { AutopsyPanel } from './AutopsyPanel'
 import { CapsPanel } from './CapsPanel'
@@ -95,6 +96,7 @@ function runSections(run: BacktestRun, luxalgo: boolean): PageSection[] {
     { id: 'stress', label: 'Stress' },
     ...(hasModelCheck(run) ? [{ id: 'model-check', label: 'Made-up turbos' }] : []),
     { id: 'curves', label: 'Day after day' },
+    ...(projectable(run) ? [{ id: 'pace', label: 'At this pace' }] : []),
     { id: 'why', label: 'Why' },
     { id: 'breakdowns', label: 'Where it comes from' },
     // A day on paper has neither: too few trades to test a cut, and no twin of its own.
@@ -103,6 +105,11 @@ function runSections(run: BacktestRun, luxalgo: boolean): PageSection[] {
     { id: 'tables', label: 'Trades, signals, days' },
     { id: 'setup', label: 'What it ran' },
   ]
+}
+
+/** A run whose days are worth drawing forward: not a day on paper (one day), not a model check (made-up turbos set against recorded ones). */
+function projectable(run: BacktestRun): boolean {
+  return !run.paper?.day && !run.model_check_of
 }
 
 /** As ModelCheckPanel shows itself: on a model check, or on a run of the recorded turbos. */
@@ -571,6 +578,11 @@ export function RunPage() {
                   <div id="curves" className={ANCHORED}>
                     <CurvesPanel summary={summary} />
                   </div>
+                  {projectable(run) && (
+                    <div id="pace" className={ANCHORED}>
+                      <ProjectionPanel run={run} />
+                    </div>
+                  )}
                   <div id="why" className={ANCHORED}>
                     <WhyPanel summary={summary} />
                   </div>

@@ -5307,6 +5307,69 @@ export interface PropFirmState {
   refused: string | null
 }
 
+/** A trading day to come, as the trader will take it: whole, or closing early (13:00 in New York). */
+export interface ProjectionDay {
+  day: string
+  kind: 'full' | 'early_close'
+  /** From NYSE's rules, for a year the US calendar file does not hold yet. */
+  estimated: boolean
+  name?: string
+  close_new_york?: string
+}
+
+/** A weekday to come the trader takes no entry on. */
+export interface ProjectionSkipped {
+  day: string
+  why: 'us_closed' | 'config_closed'
+  name: string
+  estimated: boolean
+}
+
+/** A tested day of the run left out of its pace, and why. */
+export interface ProjectionLeftOut {
+  day: string
+  why: 'us_closed' | 'closed_date' | 'after_guard' | 'after_empty'
+  name: string | null
+  estimated: boolean
+}
+
+/** The run's account, day by day, as the paths draw it (src/admin/run_projection.py). */
+export interface ProjectionPace {
+  days_used: string[]
+  /** Each day's account growth (1.02: +2 %). */
+  growths: number[]
+  early_days_used: string[]
+  /** Each day's morning, for a day that closes early. */
+  early_growths: number[]
+  left_out: ProjectionLeftOut[]
+  trades_used: number
+  partial_days: number
+  held_past_early_sale: number
+  geometric_mean_percent: number | null
+  early_geometric_mean_percent: number | null
+  account_return_percent: number | null
+  sample: BacktestSample
+  guard_day: string | null
+  emptied: boolean
+}
+
+/** What the run page's "At this pace" draws: the run's pace and the trading days to come, two years. */
+export interface BacktestProjection {
+  usable: boolean
+  why_not: string | null
+  run_id: string
+  from?: string
+  to?: string
+  capital?: number
+  seed?: number
+  market_timezone?: string
+  calendar?: { until: string | null; estimated_from: string | null; error: string | null; config_unreadable: string[] }
+  days?: ProjectionDay[]
+  skipped?: ProjectionSkipped[]
+  pace?: ProjectionPace
+  notes?: string[]
+}
+
 export interface PropFirmAsked {
   risk_percent: number
   product_type: 'futures' | 'cfd'
