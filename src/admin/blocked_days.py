@@ -1,14 +1,19 @@
 """
 Every day the trader takes no entry, or takes fewer, as the Market calendar page lists them
 (``GET /api/market-calendar``, and the dashboard's next day off): the US market's holidays and early closes
-(src/trade/data/us_market_calendar.csv), the dates of config.json's ``market_closed_dates``, and, while the
-``macro_news`` rule is in ``trade.rules``, the window around each US release it names
-(src/trade/data/macro_calendar.csv). The trader decides with the same files and rules (``check_market_hours``,
-``check_macro_news`` of src/trade/rules.py): this module only lists what they say, day by day, and changes nothing.
+(src/trade/data/us_market_calendar.csv), the dates of config.json's ``market_closed_dates``, and the US releases
+(src/trade/data/macro_calendar.csv): while the ``macro_news`` rule is in ``trade.rules``, the window around each it
+names. The trader decides with the same files and rules (``check_market_hours``, ``check_macro_news`` of
+src/trade/rules.py): this module only lists what they say, day by day, and changes nothing.
+
+Every release of the calendar is listed, applied or not (``applies``; ``not_applied`` says why: the rule is off, does
+not name it, or cannot be read), with the window the rule would keep, its defaults while it is off: the page shows
+those not applied only when asked, as details that block nothing.
 
 A day's blocks are each reason it is blocked; its ``effect`` the strongest of them: ``closed`` (no entry all day),
 ``early_close`` (entries end early, what is held is sold before the US close), ``window`` (no entry for minutes
-around a release). Weekends are not listed: the trader's hours never open on them.
+around a release), ``none`` (releases not applied alone). Weekends are not listed: the trader's hours never open on
+them.
 
 An early close's moments are those the dashboard's overview says on that day (``early_close_times``, which
 src/admin/routers/trading.py's ``_market_day`` calls): the two must never differ. A kind of block added here is
@@ -23,11 +28,13 @@ from src.admin.live_safety import config_link
 from src.trade import macro_calendar, market_calendar
 from src.trade.market_calendar import entries_end_moment, sale_moment
 
-CLOSED, EARLY_CLOSE, WINDOW = "closed", "early_close", "window"
-# The strongest first: a day closed all day is closed whatever else it holds.
-EFFECTS = (CLOSED, EARLY_CLOSE, WINDOW)
+CLOSED, EARLY_CLOSE, WINDOW, NONE = "closed", "early_close", "window", "none"
+# The strongest first: a day closed all day is closed whatever else it holds; a release not applied blocks nothing.
+EFFECTS = (CLOSED, EARLY_CLOSE, WINDOW, NONE)
 US_CLOSED, US_EARLY_CLOSE, CONFIG_CLOSED, RELEASE = "us_closed", "us_early_close", "config_closed", "release"
-EFFECT_OF = {US_CLOSED: CLOSED, CONFIG_CLOSED: CLOSED, US_EARLY_CLOSE: EARLY_CLOSE, RELEASE: WINDOW}
+EFFECT_OF = {US_CLOSED: CLOSED, CONFIG_CLOSED: CLOSED, US_EARLY_CLOSE: EARLY_CLOSE}
+# Why a release is not applied: the rule is not in config.json, it does not name the release, it cannot be read.
+RULE_OFF, NOT_NAMED, RULE_ERROR = "rule_off", "not_named", "rule_error"
 # Where each is set on the Configuration page: the blocks' headings, shown even while a rule is not in config.json.
 CLOSED_DATES = "trade.rules[market_closed_dates].rule_config.market_closed_dates"
 RELEASES = "trade.rules[macro_news].rule_config.minutes_before"
@@ -112,39 +119,59 @@ def _config_days(rules: list, calendar, add) -> dict:
 
 def _release_days(rules: list, today: date, add) -> dict:
     rule = _rule(rules, "macro_news")
-    if rule is None:
-        return {"on": False, "readable": True, "events": [], "known_from": None, "known_until": None, "upkeep": None}
+    applied_by, rule_error = None, None
+    if rule is not None:
+        try:
+            applied_by = macro_calendar.NewsRule.from_config(rule.get("rule_config"))
+        except ValueError as error:
+            rule_error = str(error)
+    said = {"on": rule is not None, "rule_error": rule_error, "events": list(applied_by.events) if applied_by else [],
+            "default_events": list(macro_calendar.DEFAULT_EVENTS)}
     try:
-        news_rule = macro_calendar.NewsRule.from_config(rule.get("rule_config"))
         calendar = macro_calendar.read_calendar()
     except (OSError, ValueError, KeyError) as error:
-        return {"on": True, "readable": False, "events": [], "known_from": None, "known_until": None, "upkeep": None,
+        return {**said, "readable": False, "all_events": [], "known_from": None, "known_until": None, "upkeep": None,
                 "error": str(error)}
+    # The window a release has, or would have once applied: the rule's, else its defaults (the catalog's rule_default).
+    shown = applied_by or macro_calendar.NewsRule()
+    not_applied = NOT_NAMED if applied_by else (RULE_ERROR if rule_error else RULE_OFF)
     for day, events in calendar.by_day.items():
         for event in events:
-            if event.event not in news_rule.events:
-                continue
-            window = news_rule.window(event)
+            window = shown.window(event)
+            applies = applied_by is not None and event.event in applied_by.events
             block = {
                 "kind": RELEASE, "event": event.event, "covers": event.covers, "time_new_york": event.time_new_york,
                 "released_at": _iso(event.moment()), "start": _iso(window.start), "end": _iso(window.end),
+                "applies": applies,
             }
-            if news_rule.flatten_minutes_before > 0:
-                # From then the position monitor sells what is held, until the window's end.
-                block["flat_from"] = _iso(event.moment() - news_rule.flatten_minutes_before * 60)
+            if not applies:
+                block["not_applied"] = not_applied
+            if shown.flatten_minutes_before > 0:
+                # From then the position monitor sells (would sell) what is held, until the window's end.
+                block["flat_from"] = _iso(event.moment() - shown.flatten_minutes_before * 60)
             add(day, block)
-    known_from, known_until = calendar.known_from(news_rule.events), calendar.known_until(news_rule.events)
+    events = applied_by.events if applied_by else macro_calendar.DEFAULT_EVENTS
+    known_from, known_until = calendar.known_from(events), calendar.known_until(events)
     return {
-        "on": True, "readable": True, "events": list(news_rule.events),
+        **said, "readable": True,
+        "all_events": [event for event in macro_calendar.MACRO_EVENTS if event in calendar.until],
         "known_from": known_from.isoformat() if known_from else None,
         "known_until": known_until.isoformat() if known_until else None,
-        "upkeep": macro_calendar.upkeep(calendar, today, news_rule.events),
+        # Said as health says it: only of the releases the rule keeps entries away from.
+        "upkeep": macro_calendar.upkeep(calendar, today, applied_by.events) if applied_by else None,
     }
+
+
+def effect_of(block: dict) -> str:
+    """What a block does to its day: a release only while it is applied."""
+    if block["kind"] == RELEASE:
+        return WINDOW if block["applies"] else NONE
+    return EFFECT_OF[block["kind"]]
 
 
 def _ordered(blocks: list) -> list:
     """The strongest first, a day's releases in the order they come."""
-    return sorted(blocks, key=lambda block: (EFFECTS.index(EFFECT_OF[block["kind"]]), block.get("start", "")))
+    return sorted(blocks, key=lambda block: (EFFECTS.index(effect_of(block)), block.get("start", "")))
 
 
 def blocked_days(rules: list, trading_timezone: str, now: datetime) -> dict:
@@ -165,7 +192,7 @@ def blocked_days(rules: list, trading_timezone: str, now: datetime) -> dict:
         days.append({
             "day": day.isoformat(),
             "weekday": day.isoweekday(),
-            "effect": EFFECT_OF[blocks[0]["kind"]],
+            "effect": effect_of(blocks[0]),
             "blocks": blocks,
         })
     return {

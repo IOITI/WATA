@@ -2,23 +2,31 @@ import { describe, expect, it } from 'vitest'
 
 import { configKeyHref } from '@/features/config/catalog'
 import type { ConfigClosedBlock, ReleaseBlock } from '@/lib/types'
-import { CHRISTMAS_EVE, CPI, DAY_AFTER, marketCalendar, NEW_YEAR, THANKSGIVING } from '@/test/marketCalendar'
+import { CHRISTMAS_EVE, CPI, DAY_AFTER, marketCalendar, NEW_YEAR, PPI, ruleOff, THANKSGIVING } from '@/test/marketCalendar'
 
 import {
   blockLabel,
   blockName,
   blockSentence,
+  blockTone,
   chosenYear,
   countByEffect,
   dayHref,
   dayLabel,
   dayOffLine,
   daysOfYear,
+  defaultKinds,
+  effectOf,
   monthsOf,
   nextDayOff,
+  nextRelease,
+  nextReleaseLine,
   nextWindow,
   relativeLabel,
+  releaseView,
+  showsReleases,
   todayTile,
+  withView,
   yearsOf,
 } from './marketCalendarModel'
 
@@ -50,6 +58,22 @@ describe('what each block says', () => {
     expect(blockName({ ...release, event: 'FOMC', covers: 'statement' })).toBe('FOMC statement')
   })
 
+  it('says a release not applied blocks nothing, and the window it would have', () => {
+    const notNamed = PPI.blocks[0] as ReleaseBlock
+    expect(blockTone(notNamed)).toBe('neutral')
+    expect(blockTone(CPI.blocks[0])).toBe('info')
+    expect(blockSentence(notNamed, 'Europe/Paris')).toBe(
+      'Not applied: the macro_news rule does not name PPI. Named, no entry from 14:25 to 14:45 around PPI (08:30 New York, 14:30 Paris).',
+    )
+    const off = ruleOff().days.find((day) => day.day === '2026-12-10')!.blocks[0]
+    expect(blockSentence(off, 'Europe/Paris')).toBe(
+      'Not applied: the macro_news rule is off. With its default minutes, no entry from 14:25 to 14:45 around CPI (08:30 New York, 14:30 Paris).',
+    )
+    expect(blockSentence({ ...notNamed, not_applied: 'rule_error' }, 'Europe/Paris')).toMatch(
+      /^Not applied: the macro_news rule could not be read\. With its default minutes, no entry from 14:25/,
+    )
+  })
+
   it('says a closed date of config.json the US calendar has already can go', () => {
     const config = NEW_YEAR.blocks[1] as ConfigClosedBlock
     expect(blockLabel(config)).toBe('Closed date')
@@ -79,6 +103,11 @@ describe('the days', () => {
       hint: 'Sat 28 Nov 2026: no trading on Saturdays and Sundays',
     })
     expect(todayTile(marketCalendar({ today: '2026-11-30' })).value).toBe('Ordinary day')
+    // A release not applied blocks nothing: an ordinary day, said with it.
+    expect(todayTile(marketCalendar({ today: '2026-12-15' }))).toEqual({
+      value: 'Ordinary day',
+      hint: 'Tue 15 Dec 2026: the trading hours as usual (PPI at 08:30 New York, not applied)',
+    })
   })
 
   it('offers each year known and the current one, choosing the one asked only when known', () => {
@@ -90,11 +119,46 @@ describe('the days', () => {
     expect(chosenYear(calendar, null)).toBe(2026)
   })
 
-  it('lists a year’s days, its release windows left out when asked', () => {
+  it('lists a year’s days, its release windows left out when asked, those not applied only when asked', () => {
     const calendar = marketCalendar()
-    expect(daysOfYear(calendar, 2026).map((day) => day.day)).toEqual(['2026-11-26', '2026-11-27', '2026-12-10', '2026-12-24'])
-    expect(daysOfYear(calendar, 2026, false).map((day) => day.day)).toEqual(['2026-11-26', '2026-11-27', '2026-12-24'])
-    expect(countByEffect(daysOfYear(calendar, 2026))).toEqual({ closed: 1, early_close: 2, window: 1 })
+    const view = (windows: boolean, unapplied: boolean, kinds: string[] | null = null) => ({ windows, unapplied, kinds })
+    const listed = (shown: ReturnType<typeof view>) => daysOfYear(calendar, 2026, shown).map((day) => day.day)
+    expect(listed(view(true, false))).toEqual(['2026-11-26', '2026-11-27', '2026-12-10', '2026-12-24'])
+    expect(listed(view(false, false))).toEqual(['2026-11-26', '2026-11-27', '2026-12-24'])
+    expect(listed(view(true, true))).toEqual(['2026-11-26', '2026-11-27', '2026-12-10', '2026-12-15', '2026-12-24'])
+    expect(listed(view(true, true, ['CPI']))).toEqual(['2026-11-26', '2026-11-27', '2026-12-10', '2026-12-24'])
+    expect(listed(view(true, true, ['PPI']))).toEqual(['2026-11-26', '2026-11-27', '2026-12-15', '2026-12-24'])
+    // The counts are of what blocks: the default view, releases not applied left out.
+    expect(countByEffect(daysOfYear(calendar, 2026))).toEqual({ closed: 1, early_close: 2, window: 1, none: 0 })
+  })
+
+  it('works a day’s effect out again from what is kept of it', () => {
+    const goodFriday = [...THANKSGIVING.blocks, ...CPI.blocks]
+    expect(effectOf(goodFriday)).toBe('closed')
+    expect(effectOf(CPI.blocks)).toBe('window')
+    expect(effectOf(PPI.blocks)).toBe('none')
+    // CPI's window hidden, a release not applied shown on the same day: the day blocks nothing as drawn.
+    const both = { ...CPI, blocks: [...CPI.blocks, ...PPI.blocks] }
+    const days = daysOfYear(marketCalendar({ days: [both] }), 2026, { windows: false, unapplied: true, kinds: null })
+    expect(days.map((day) => [day.day, day.effect, day.blocks.length])).toEqual([['2026-12-10', 'none', 1]])
+  })
+
+  it('reads the view from the address and writes it back, its defaults left out', () => {
+    const calendar = marketCalendar()
+    expect(defaultKinds(calendar)).toEqual(['FOMC', 'CPI', 'NFP', 'PCE'])
+    expect(defaultKinds(marketCalendar({ news: { ...calendar.news, events: ['PPI'] } }))).toEqual(['FOMC', 'CPI', 'NFP', 'PCE', 'PPI'])
+    const opened = releaseView(new URLSearchParams('year=2026'), calendar)
+    expect(opened).toEqual({ windows: true, unapplied: false, kinds: ['FOMC', 'CPI', 'NFP', 'PCE'] })
+    expect(releaseView(new URLSearchParams('releases=hide&unapplied=show&kinds=PPI,ISM,CPI'), calendar)).toEqual({
+      windows: false, unapplied: true, kinds: ['PPI', 'CPI'],
+    })
+    expect(releaseView(new URLSearchParams('kinds='), calendar).kinds).toEqual([])
+    const written = withView(new URLSearchParams('year=2026'), { windows: true, unapplied: true, kinds: ['GDP', 'CPI'] }, calendar)
+    expect(written.toString()).toBe('year=2026&unapplied=show&kinds=CPI%2CGDP')
+    expect(withView(written, opened, calendar).toString()).toBe('year=2026')
+    expect(showsReleases(opened, calendar)).toBe(true)
+    expect(showsReleases(opened, ruleOff())).toBe(false)
+    expect(showsReleases({ ...opened, unapplied: true }, ruleOff())).toBe(true)
   })
 
   it('finds the next day off after today, over a release window and across the year’s end', () => {
@@ -103,6 +167,19 @@ describe('the days', () => {
     expect(nextDayOff(marketCalendar({ today: '2027-01-01' }))).toBeNull()
     expect(nextWindow(marketCalendar())?.day).toBe('2026-12-10')
     expect(nextWindow(marketCalendar({ today: '2026-12-10' }))?.day).toBe('2026-12-10')
+    // A release not applied is never a day off nor a window.
+    expect(nextDayOff(ruleOff())?.day).toBe('2026-12-24')
+    expect(nextWindow(ruleOff())).toBeNull()
+    expect(nextWindow(marketCalendar({ today: '2026-12-11' }))).toBeNull()
+  })
+
+  it('names the next release, applied or not, for the tile while the rule is off', () => {
+    const next = nextRelease(ruleOff(), ['FOMC', 'CPI', 'NFP', 'PCE'])
+    expect(next?.day.day).toBe('2026-12-10')
+    expect(nextReleaseLine(next!, '2026-11-27')).toBe('CPI on Thu 10 Dec at 08:30 New York (not applied)')
+    expect(nextReleaseLine(next!, '2026-12-09')).toBe('CPI tomorrow at 08:30 New York (not applied)')
+    expect(nextRelease(ruleOff(), ['PPI'])?.day.day).toBe('2026-12-15')
+    expect(nextRelease(ruleOff(), ['GDP'])).toBeNull()
   })
 
   it('says the next day off on one line, the year only when it is another', () => {

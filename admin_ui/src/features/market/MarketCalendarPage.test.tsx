@@ -6,7 +6,7 @@ import { MemoryRouter } from 'react-router'
 
 import { AuthContext } from '@/features/auth/auth-context'
 import type { MarketCalendar, Session } from '@/lib/types'
-import { marketCalendar } from '@/test/marketCalendar'
+import { marketCalendar, ruleOff } from '@/test/marketCalendar'
 import { WithTrail } from '@/test/WithTrail'
 
 import { MarketCalendarPage } from './MarketCalendarPage'
@@ -121,6 +121,36 @@ describe('the Market calendar page', () => {
     const notice = await screen.findByText(/No window is kept around US releases/)
     expect(within(notice).getByRole('link', { name: 'macro_news rule' })).toHaveAttribute('href', '/config/hours#b-news')
     expect(screen.queryByRole('switch', { name: 'Release windows' })).not.toBeInTheDocument()
+  })
+
+  it('shows the releases the rule does not apply only when asked, as blocking nothing', async () => {
+    answered = ruleOff()
+    renderPage()
+
+    await dayItem('Thu 26 Nov 2026')
+    expect(screen.queryByRole('listitem', { name: 'Thu 10 Dec 2026' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('switch', { name: 'Release windows' })).not.toBeInTheDocument()
+    expect(screen.getByText(/Next: CPI on Thu 10 Dec at 08:30 New York \(not applied\)/)).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('switch', { name: /US releases not applied/ }))
+    const cpi = screen.getByRole('listitem', { name: 'Thu 10 Dec 2026' })
+    expect(within(cpi).getByText('CPI')).toBeInTheDocument()
+    expect(within(cpi).getByText(/^Not applied: the macro_news rule is off\. With its default minutes, no entry from 14:25 to 14:45/)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /^10 December: Release not applied/ })).toHaveAttribute('href', '#d-2026-12-10')
+    expect(within(screen.getByRole('list', { name: 'Legend' })).getByText('Release not applied')).toBeInTheDocument()
+    // PPI is not among the kinds shown until chosen.
+    expect(screen.queryByRole('listitem', { name: 'Tue 15 Dec 2026' })).not.toBeInTheDocument()
+    // Still not a blocked day: the counts and the next day off are as before.
+    expect(screen.getByText('2 early closes, 0 release windows')).toBeInTheDocument()
+  })
+
+  it('shows the kinds chosen in the address, applied or not', async () => {
+    renderPage('/market-calendar?unapplied=show&kinds=PPI')
+
+    const ppi = await dayItem('Tue 15 Dec 2026')
+    expect(within(ppi).getByText(/^Not applied: the macro_news rule does not name PPI\./)).toBeInTheDocument()
+    expect(screen.queryByRole('listitem', { name: 'Thu 10 Dec 2026' })).not.toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: 'Release kinds' })).toBeInTheDocument()
   })
 
   it('says when a calendar runs out', async () => {

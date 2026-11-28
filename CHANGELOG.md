@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.107.0 - The US releases on the Market calendar, applied or not
+
+**Release date:** 2026-11-28
+
+The Market calendar listed the windows around US releases only while the `macro_news` rule is in config.json. The server has no such rule, so the page showed no FOMC, CPI, NFP or PCE at all, with no way to look at them short of turning the rule on.
+
+- **"US releases not applied"**: a switch beside the year tabs lists every release of WATA's calendar that the trader does not keep entries away from, read-only. Each says why it is not applied (the rule is off, does not name it, or cannot be read) and the window it would have: the rule's minutes, or its defaults while it is off ("Not applied: the macro_news rule is off. With its default minutes, no entry from 14:25 to 14:45 around CPI (08:30 New York, 14:30 Paris).").
+- **A filter by kind**: FOMC, CPI, NFP and PCE by default (and those the rule names), PPI, RETAIL, GDP and JOLTS when chosen. The switch and the kinds are kept in the address, so a link shows the same.
+- **They block nothing, and the page says so**: dashed and greyed in the year at a glance, an outlined badge in the list, a legend entry, never counted among the blocked days, never the dashboard's next day off. While the rule is off, the Next release window tile names the next release, not applied.
+- Nothing in config.json or the trader changes. Changes the admin alone; no backtest turns stale.
+
 ## v0.106.0 - Every day the market is blocked, in the admin
 
 **Release date:** 2026-11-28

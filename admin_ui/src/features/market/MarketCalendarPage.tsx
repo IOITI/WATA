@@ -1,6 +1,7 @@
 // Every day the trader takes no entry, or fewer (GET /api/market-calendar): the US market's holidays and early
 // closes, config.json's closed dates and the windows around US releases. The year at a glance, then each day with
-// what WATA does then. Nothing here changes anything: each kind says where it is changed.
+// what WATA does then. The releases the macro_news rule does not apply are shown when asked, as details that block
+// nothing. Nothing here changes anything: each kind says where it is changed.
 
 import { useQuery } from '@tanstack/react-query'
 import {
@@ -10,6 +11,7 @@ import {
   cn,
   Hint,
   KpiTile,
+  MultiSelect,
   PageHeader,
   Panel,
   QueryState,
@@ -32,24 +34,32 @@ import {
   countByEffect,
   dayAnchor,
   dayLabel,
+  defaultKinds,
   dayOffWhat,
   daysOfYear,
   EFFECT_LABELS,
   monthsOf,
   nextDayOff,
+  nextRelease,
+  nextReleaseLine,
   nextWindow,
   relativeLabel,
+  releaseView,
+  showsReleases,
   todayTile,
+  withView,
   yearsOf,
   zonesLine,
 } from './marketCalendarModel'
-import type { Month } from './marketCalendarModel'
+import type { Month, ReleaseView } from './marketCalendarModel'
 import { MARKET_CALENDAR_QUERY } from './marketCalendarQuery'
 
 const EFFECT_CELL: Record<DayEffect, string> = {
   closed: 'bg-negative/15 text-negative font-semibold',
   early_close: 'bg-warning/15 text-warning font-semibold',
   window: 'bg-info/15 text-info',
+  // Blocks nothing: an outline alone, said in words too (the hint, the list, the words for screen readers).
+  none: 'border border-dashed border-muted-foreground/70 text-muted-foreground',
 }
 
 const WEEK_HEADS = ['M', 'T', 'W', 'T', 'F', 'S', 'S']
@@ -85,10 +95,21 @@ function Notices({ calendar }: { calendar: MarketCalendar }) {
           <AlertDescription>{calendar.us.upkeep}.</AlertDescription>
         </Alert>
       )}
-      {calendar.news.on && !calendar.news.readable && (
+      {!calendar.news.readable && (
         <Alert tone="danger">
           <AlertDescription>
-            The window around US releases could not be worked out ({calendar.news.error ?? 'unknown error'}): its days are not listed.
+            The calendar of US releases could not be read ({calendar.news.error ?? 'unknown error'}): no release is listed.
+          </AlertDescription>
+        </Alert>
+      )}
+      {calendar.news.rule_error && (
+        <Alert tone="danger">
+          <AlertDescription>
+            The{' '}
+            <Link className="underline underline-offset-2" to={newsHref}>
+              macro_news rule
+            </Link>{' '}
+            in config.json could not be read ({calendar.news.rule_error}): no window is kept around releases.
           </AlertDescription>
         </Alert>
       )}
@@ -115,7 +136,8 @@ function Notices({ calendar }: { calendar: MarketCalendar }) {
             <Link className="underline underline-offset-2" to={newsHref}>
               macro_news rule
             </Link>{' '}
-            is not in config.json, so FOMC, CPI, NFP and PCE days block nothing.
+            is not in config.json, so FOMC, CPI, NFP and PCE days block nothing. "US releases not applied" shows them
+            without changing that.
           </AlertDescription>
         </Alert>
       )}
@@ -126,6 +148,7 @@ function Notices({ calendar }: { calendar: MarketCalendar }) {
 function Tiles({ calendar, year, days }: { calendar: MarketCalendar; year: number; days: BlockedDay[] }) {
   const next = nextDayOff(calendar)
   const release = nextWindow(calendar)
+  const unapplied = release ? null : nextRelease(calendar, defaultKinds(calendar))
   const counts = countByEffect(days)
   const today = todayTile(calendar)
   return (
@@ -141,10 +164,12 @@ function Tiles({ calendar, year, days }: { calendar: MarketCalendar; year: numbe
         value={release ? dayLabel(release.day, release.day.slice(0, 4) !== calendar.today.slice(0, 4)) : calendar.news.on ? 'None known' : 'Off'}
         hint={
           release
-            ? blockSentence(release.blocks.find((block) => block.kind === 'release') ?? release.blocks[0], calendar.timezone)
+            ? blockSentence(release.blocks.find((block) => block.kind === 'release' && block.applies) ?? release.blocks[0], calendar.timezone)
             : calendar.news.on
               ? `Nothing known after ${calendar.news.known_until ?? 'the calendar'}`
-              : 'The macro_news rule is not in config.json'
+              : unapplied
+                ? `The macro_news rule is not in config.json. Next: ${nextReleaseLine(unapplied, calendar.today)}`
+                : 'The macro_news rule is not in config.json'
         }
       />
       <KpiTile
@@ -223,7 +248,7 @@ function MonthGrid({ month, timeZone, today }: { month: Month; timeZone: string;
   )
 }
 
-function YearPanel({ calendar, year, days }: { calendar: MarketCalendar; year: number; days: BlockedDay[] }) {
+function YearPanel({ calendar, year, days, view }: { calendar: MarketCalendar; year: number; days: BlockedDay[]; view: ReleaseView }) {
   const months = useMemo(() => monthsOf(year, days, calendar.today), [year, days, calendar.today])
   return (
     <Panel id="year" title={`${year} at a glance`} description="Each blocked day in the colour of what it does; a day leads to its line below.">
@@ -239,6 +264,12 @@ function YearPanel({ calendar, year, days }: { calendar: MarketCalendar; year: n
             {EFFECT_LABELS[effect]}
           </li>
         ))}
+        {view.unapplied && (
+          <li className="flex items-center gap-1.5">
+            <span className={cn('inline-block size-3 rounded-sm', EFFECT_CELL.none)} aria-hidden />
+            {EFFECT_LABELS.none}
+          </li>
+        )}
         <li className="flex items-center gap-1.5">
           <span className="inline-block size-3 rounded-sm ring-1 ring-foreground" aria-hidden />
           Today
@@ -282,7 +313,9 @@ function DaysPanel({ calendar, days }: { calendar: MarketCalendar; days: Blocked
                   {day.blocks.map((block, index) => (
                     <li key={index} className="space-y-0.5">
                       <p className="flex flex-wrap items-center gap-2 text-sm">
-                        <Badge tone={blockTone(block)}>{blockLabel(block)}</Badge>
+                        <Badge tone={blockTone(block)} variant={block.kind === 'release' && !block.applies ? 'outline' : undefined}>
+                          {blockLabel(block)}
+                        </Badge>
                         <span>{blockName(block)}</span>
                       </p>
                       <p className="text-sm text-muted-foreground">
@@ -312,9 +345,13 @@ export function MarketCalendarPage() {
   const query = useQuery(MARKET_CALENDAR_QUERY)
   const calendar = query.data
   const [searchParams, setSearchParams] = useSearchParams()
-  const releases = searchParams.get('releases') !== 'hide'
+  const view = useMemo(() => (calendar ? releaseView(searchParams, calendar) : null), [calendar, searchParams])
   const year = calendar ? chosenYear(calendar, searchParams.get('year')) : null
-  const days = useMemo(() => (calendar && year !== null ? daysOfYear(calendar, year, releases) : []), [calendar, year, releases])
+  const days = useMemo(() => (calendar && year !== null && view ? daysOfYear(calendar, year, view) : []), [calendar, year, view])
+  const setView = (change: Partial<ReleaseView>) => {
+    if (!calendar || !view) return
+    setSearchParams((params) => withView(params, { ...view, ...change }, calendar), { replace: true })
+  }
   useScrollToDay(Boolean(calendar))
 
   const yearHref = (chosen: number) => {
@@ -332,7 +369,7 @@ export function MarketCalendarPage() {
         description="Every day the trader takes no entry, or fewer: the US market's holidays and early closes, the closed dates of config.json, and the windows around US releases."
       />
       <QueryState isPending={query.isPending} error={query.error} hasData={Boolean(calendar)}>
-        {calendar && year !== null && (
+        {calendar && year !== null && view && (
           <>
             <Notices calendar={calendar} />
             <Tiles calendar={calendar} year={year} days={daysOfYear(calendar, year)} />
@@ -347,19 +384,32 @@ export function MarketCalendarPage() {
                 linkComponent={RouterLink}
                 renderContent={false}
               />
-              {calendar.news.on && (
-                <Switch
-                  label="Release windows"
-                  checked={releases}
-                  onChange={(checked) => setSearchParams((params) => {
-                    if (checked) params.delete('releases')
-                    else params.set('releases', 'hide')
-                    return params
-                  }, { replace: true })}
-                />
-              )}
+              <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+                {calendar.news.on && (
+                  <Switch label="Release windows" checked={view.windows} onChange={(checked) => setView({ windows: checked })} />
+                )}
+                {calendar.news.readable && calendar.news.all_events.length > 0 && (
+                  <Switch
+                    label="US releases not applied"
+                    description="Blocking nothing: shown to look at, config.json unchanged"
+                    checked={view.unapplied}
+                    onChange={(checked) => setView({ unapplied: checked })}
+                  />
+                )}
+              </div>
             </div>
-            <YearPanel calendar={calendar} year={year} days={days} />
+            {showsReleases(view, calendar) && calendar.news.all_events.length > 0 && (
+              <div className="max-w-xl">
+                <MultiSelect
+                  label="Release kinds"
+                  options={calendar.news.all_events.map((kind) => ({ value: kind, label: kind }))}
+                  value={view.kinds ?? calendar.news.all_events}
+                  onChange={(kinds) => setView({ kinds })}
+                  placeholder="No kind: no release shown"
+                />
+              </div>
+            )}
+            <YearPanel calendar={calendar} year={year} days={days} view={view} />
             <DaysPanel calendar={calendar} days={days} />
             <p className="text-xs text-muted-foreground">
               The US holidays and early closes come with WATA (<code>src/trade/data/us_market_calendar.csv</code>, known until{' '}

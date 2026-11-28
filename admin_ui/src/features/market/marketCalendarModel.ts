@@ -1,12 +1,13 @@
 // The Market calendar page's words and shapes, and the dashboard's next day off (GET /api/market-calendar,
 // src/admin/blocked_days.py): every day the trader takes no entry, or fewer. The server reads the files and rules the
-// trader reads; this module only says what it found, day by day. Pure.
+// trader reads; this module only says what it found, day by day. Every US release is listed, applied or not: those
+// not applied block nothing, and the page shows them only when asked (`ReleaseView`). Pure.
 
 import { formatDay } from 'ioiti-ui'
 import type { StatusTone } from 'ioiti-ui'
 
 import { cityOfZone, NEW_YORK } from '@/features/dashboard/marketClock'
-import type { BlockedDay, DayBlock, DayEffect, MarketCalendar } from '@/lib/types'
+import type { BlockedDay, DayBlock, DayEffect, MarketCalendar, ReleaseBlock } from '@/lib/types'
 
 export const PAGE_PATH = '/market-calendar'
 
@@ -20,6 +21,7 @@ export const EFFECT_LABELS: Record<DayEffect, string> = {
   closed: 'Closed all day',
   early_close: 'Closes early',
   window: 'Release window',
+  none: 'Release not applied',
 }
 
 /** The tone of each effect: a day closed stops everything, an early close part of it, a window minutes. */
@@ -27,6 +29,7 @@ export const EFFECT_TONES: Record<DayEffect, StatusTone> = {
   closed: 'danger',
   early_close: 'warning',
   window: 'info',
+  none: 'neutral',
 }
 
 function clock(iso: string, timeZone: string): string {
@@ -58,9 +61,12 @@ export function isWeekend(day: string): boolean {
 /** What today is for the trader's calendar: a blocked day's effect, a weekend, or an ordinary day. */
 export function todayTile(calendar: MarketCalendar): { value: string; hint: string } {
   const today = calendar.days.find((day) => day.day === calendar.today)
-  if (today) return { value: EFFECT_LABELS[today.effect], hint: blockSentence(today.blocks[0], calendar.timezone) }
+  if (today && today.effect !== 'none') return { value: EFFECT_LABELS[today.effect], hint: blockSentence(today.blocks[0], calendar.timezone) }
   if (isWeekend(calendar.today)) return { value: 'Weekend', hint: `${dayLabel(calendar.today)}: no trading on Saturdays and Sundays` }
-  return { value: 'Ordinary day', hint: `${dayLabel(calendar.today)}: the trading hours as usual` }
+  // A release not applied blocks nothing: an ordinary day, said with it.
+  const release = today?.blocks.find((block): block is ReleaseBlock => block.kind === 'release')
+  const aside = release ? ` (${release.event} at ${release.time_new_york} New York, not applied)` : ''
+  return { value: 'Ordinary day', hint: `${dayLabel(calendar.today)}: the trading hours as usual${aside}` }
 }
 
 /** "Today", "Yesterday", "Tomorrow", or nothing for a day further away. */
@@ -91,7 +97,7 @@ export function blockTone(block: DayBlock): StatusTone {
     case 'us_early_close':
       return 'warning'
     case 'release':
-      return 'info'
+      return block.applies ? 'info' : 'neutral'
   }
 }
 
@@ -129,12 +135,78 @@ export function blockSentence(block: DayBlock, timeZone: string): string {
       return parts.length > 0 ? `${closes}: ${parts.join(', ')}.` : `${closes}.`
     }
     case 'release': {
-      const window = `No entry from ${clock(block.start, timeZone)} to ${clock(block.end, timeZone)}`
+      const window = `no entry from ${clock(block.start, timeZone)} to ${clock(block.end, timeZone)}`
       const released = `${block.time_new_york} New York, ${clock(block.released_at, timeZone)} ${city}`
       const flat = block.flat_from ? `; what is held is sold from ${clock(block.flat_from, timeZone)}` : ''
-      return `${window} around ${block.event} (${released})${flat}.`
+      const said = `${window} around ${block.event} (${released})${flat}.`
+      if (block.applies) return said.charAt(0).toUpperCase() + said.slice(1)
+      switch (block.not_applied) {
+        case 'not_named':
+          return `Not applied: the macro_news rule does not name ${block.event}. Named, ${said}`
+        case 'rule_error':
+          return `Not applied: the macro_news rule could not be read. With its default minutes, ${said}`
+        default:
+          return `Not applied: the macro_news rule is off. With its default minutes, ${said}`
+      }
     }
   }
+}
+
+/** What a day does once some of its blocks are left out: the strongest of those kept. */
+export function effectOf(blocks: DayBlock[]): DayEffect {
+  if (blocks.some((block) => block.kind === 'us_closed' || block.kind === 'config_closed')) return 'closed'
+  if (blocks.some((block) => block.kind === 'us_early_close')) return 'early_close'
+  if (blocks.some((block) => block.kind === 'release' && block.applies)) return 'window'
+  return 'none'
+}
+
+/**
+ * Which releases the page shows: the windows applied (`windows`), those not applied (`unapplied`, blocking nothing),
+ * of the kinds chosen (`kinds`; null for every kind). Kept in the address: `?releases=hide`, `?unapplied=show`,
+ * `?kinds=FOMC,CPI`.
+ */
+export interface ReleaseView {
+  windows: boolean
+  unapplied: boolean
+  kinds: string[] | null
+}
+
+/** Every applied window, nothing else: the counts, and the page as it opens. */
+export const APPLIED_ONLY: ReleaseView = { windows: true, unapplied: false, kinds: null }
+
+/** The kinds shown until others are chosen: the rule's, and the four a rule that names none takes. */
+export function defaultKinds(calendar: MarketCalendar): string[] {
+  const wanted = new Set([...calendar.news.events, ...calendar.news.default_events])
+  return calendar.news.all_events.filter((kind) => wanted.has(kind))
+}
+
+export function releaseView(params: URLSearchParams, calendar: MarketCalendar): ReleaseView {
+  const asked = params.get('kinds')
+  return {
+    windows: params.get('releases') !== 'hide',
+    unapplied: params.get('unapplied') === 'show',
+    kinds: asked === null ? defaultKinds(calendar) : asked.split(',').filter((kind) => calendar.news.all_events.includes(kind)),
+  }
+}
+
+/** The address's parameters with the view changed, the defaults left out. */
+export function withView(params: URLSearchParams, view: ReleaseView, calendar: MarketCalendar): URLSearchParams {
+  const next = new URLSearchParams(params)
+  if (view.windows) next.delete('releases')
+  else next.set('releases', 'hide')
+  if (view.unapplied) next.set('unapplied', 'show')
+  else next.delete('unapplied')
+  const defaults = defaultKinds(calendar)
+  const kinds = view.kinds ?? calendar.news.all_events
+  const same = kinds.length === defaults.length && defaults.every((kind) => kinds.includes(kind))
+  if (same) next.delete('kinds')
+  else next.set('kinds', calendar.news.all_events.filter((kind) => kinds.includes(kind)).join(','))
+  return next
+}
+
+/** Whether the view shows releases at all (the kinds filter is offered only then). */
+export function showsReleases(view: ReleaseView, calendar: MarketCalendar): boolean {
+  return (calendar.news.on && view.windows) || view.unapplied
 }
 
 /** The years the calendar knows a day of, and the market's current year, oldest first. */
@@ -150,29 +222,55 @@ export function chosenYear(calendar: MarketCalendar, asked: string | null): numb
   return yearsOf(calendar).includes(year) ? year : Number(calendar.today.slice(0, 4))
 }
 
-/** A year's blocked days, oldest first; without its release windows when `releases` is false (the closed days kept). */
-export function daysOfYear(calendar: MarketCalendar, year: number, releases = true): BlockedDay[] {
+/** A year's days, oldest first, with the releases the view shows; a day left without a block is dropped. */
+export function daysOfYear(calendar: MarketCalendar, year: number, view: ReleaseView = APPLIED_ONLY): BlockedDay[] {
+  const shown = (block: DayBlock) =>
+    block.kind !== 'release' ||
+    ((view.kinds === null || view.kinds.includes(block.event)) && (block.applies ? view.windows : view.unapplied))
   return calendar.days
     .filter((day) => day.day.startsWith(`${year}-`))
-    .map((day) => (releases ? day : { ...day, blocks: day.blocks.filter((block) => block.kind !== 'release') }))
+    .map((day) => {
+      const blocks = day.blocks.filter(shown)
+      return blocks.length === day.blocks.length ? day : { ...day, blocks, effect: effectOf(blocks) }
+    })
     .filter((day) => day.blocks.length > 0)
 }
 
 /** How many days of each effect a list holds. */
 export function countByEffect(days: BlockedDay[]): Record<DayEffect, number> {
-  const counts: Record<DayEffect, number> = { closed: 0, early_close: 0, window: 0 }
+  const counts: Record<DayEffect, number> = { closed: 0, early_close: 0, window: 0, none: 0 }
   for (const day of days) counts[day.effect] += 1
   return counts
 }
 
 /** The next day after today the market closes, or closes early (a closed date of config.json too); null when none is known. */
 export function nextDayOff(calendar: MarketCalendar): BlockedDay | null {
-  return calendar.days.find((day) => day.day > calendar.today && day.effect !== 'window') ?? null
+  return calendar.days.find((day) => day.day > calendar.today && (day.effect === 'closed' || day.effect === 'early_close')) ?? null
 }
 
-/** The next release window from today on, today's included; null while the macro_news rule is off or none is known. */
+/** The next release window applied, from today on, today's included; null while the macro_news rule is off or none is known. */
 export function nextWindow(calendar: MarketCalendar): BlockedDay | null {
-  return calendar.days.find((day) => day.day >= calendar.today && day.blocks.some((block) => block.kind === 'release')) ?? null
+  return (
+    calendar.days.find((day) => day.day >= calendar.today && day.blocks.some((block) => block.kind === 'release' && block.applies)) ??
+    null
+  )
+}
+
+/** The next release of these kinds from today on, applied or not, with its day. */
+export function nextRelease(calendar: MarketCalendar, kinds: string[]): { day: BlockedDay; release: ReleaseBlock } | null {
+  for (const day of calendar.days) {
+    if (day.day < calendar.today) continue
+    const release = day.blocks.find((block): block is ReleaseBlock => block.kind === 'release' && kinds.includes(block.event))
+    if (release) return { day, release }
+  }
+  return null
+}
+
+/** "CPI on Thu 10 Dec at 08:30 New York (not applied)": the tile's line while the rule is off. */
+export function nextReleaseLine(next: { day: BlockedDay; release: ReleaseBlock }, today: string): string {
+  const relative = relativeLabel(next.day.day, today)
+  const when = relative ? `${relative.toLowerCase()}` : `on ${dayLabel(next.day.day, next.day.day.slice(0, 4) !== today.slice(0, 4))}`
+  return `${next.release.event} ${when} at ${next.release.time_new_york} New York (${next.release.applies ? 'applied' : 'not applied'})`
 }
 
 /** What a day off is, by its strongest block: "the US market closes early at 13:00 New York (Christmas Eve)". */

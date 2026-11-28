@@ -66,11 +66,12 @@ def test_an_early_close_says_the_moments_the_dashboard_says_that_day():
 
 def test_every_us_day_of_the_file_is_listed_and_no_weekend():
     answer = blocked_days(rules(), "Europe/Paris", NOW)
-    listed = {day["day"] for day in answer["days"]}
+    listed = [day["day"] for day in answer["days"]]
+    blocking = {day["day"] for day in answer["days"] if day["effect"] in ("closed", "early_close")}
 
-    assert listed == {day.isoformat() for day in market_calendar.read_market_calendar().by_day}
+    assert blocking == {day.isoformat() for day in market_calendar.read_market_calendar().by_day}
     assert all(day["weekday"] <= 5 for day in answer["days"])
-    assert [day["day"] for day in answer["days"]] == sorted(listed)
+    assert listed == sorted(set(listed))
     assert answer["us"] == {"readable": True, "until": "2027-12-31", "upkeep": None}
     assert answer["today"] == "2026-11-27"
 
@@ -99,11 +100,24 @@ def test_a_closed_date_on_an_early_close_closes_the_day():
     assert [block["kind"] for block in day["blocks"]] == ["config_closed", "us_early_close"]
 
 
-def test_without_the_macro_news_rule_no_release_blocks_anything():
+def test_without_the_macro_news_rule_its_releases_are_listed_but_block_nothing():
     answer = blocked_days(rules(), "Europe/Paris", NOW)
+    days = by_day(answer)
 
-    assert answer["news"]["on"] is False
-    assert all(block["kind"] != "release" for day in answer["days"] for block in day["blocks"])
+    assert answer["news"]["on"] is False and answer["news"]["events"] == []
+    assert all(day["effect"] != "window" for day in answer["days"])
+    # With the rule's default minutes, as it would be once switched on.
+    assert days["2026-12-10"] == {"day": "2026-12-10", "weekday": 4, "effect": "none", "blocks": [{
+        "kind": "release", "event": "CPI", "covers": "2026-11", "time_new_york": "08:30",
+        "released_at": "2026-12-10T13:30:00+00:00", "start": "2026-12-10T13:25:00+00:00",
+        "end": "2026-12-10T13:45:00+00:00", "applies": False, "not_applied": "rule_off",
+    }]}
+    # Every kind the file holds, the later ones too.
+    assert days["2026-12-15"]["blocks"][0]["event"] == "PPI"
+    assert answer["news"]["all_events"] == ["FOMC", "CPI", "NFP", "PCE", "PPI", "RETAIL", "GDP", "JOLTS"]
+    assert answer["news"]["default_events"] == ["FOMC", "CPI", "NFP", "PCE"]
+    assert answer["news"]["known_until"] == macro_calendar.read_calendar().known_until().isoformat()
+    assert answer["news"]["upkeep"] is None
     assert answer["news"]["link"]["config"]["block"] == "news"
 
 
@@ -117,14 +131,16 @@ def test_each_release_the_rule_names_is_a_window_as_the_trader_keeps_it():
         "kind": "release", "event": "CPI", "covers": "2026-11", "time_new_york": "08:30",
         # 5 minutes before to 15 after, New York's 08:30.
         "released_at": "2026-12-10T13:30:00+00:00", "start": "2026-12-10T13:25:00+00:00",
-        "end": "2026-12-10T13:45:00+00:00",
+        "end": "2026-12-10T13:45:00+00:00", "applies": True,
     }]
     fomc = days["2026-12-09"]["blocks"][0]
     # 45 minutes after an FOMC statement: its press conference follows.
     assert (fomc["event"], fomc["start"], fomc["end"]) == ("FOMC", "2026-12-09T18:55:00+00:00",
                                                            "2026-12-09T19:45:00+00:00")
-    # PPI is not among the four a rule that names none keeps entries away from.
-    assert "2026-12-15" not in days
+    # PPI is not among the four a rule that names none keeps entries away from: listed, blocking nothing.
+    ppi = days["2026-12-15"]
+    assert ppi["effect"] == "none"
+    assert (ppi["blocks"][0]["applies"], ppi["blocks"][0]["not_applied"]) == (False, "not_named")
     assert answer["news"]["events"] == ["FOMC", "CPI", "NFP", "PCE"]
     assert answer["news"]["known_until"] == macro_calendar.read_calendar().known_until().isoformat()
 
@@ -132,18 +148,21 @@ def test_each_release_the_rule_names_is_a_window_as_the_trader_keeps_it():
 def test_the_window_widens_to_the_sale_before_a_release_and_follows_the_events_named():
     days = by_day(blocked_days(rules(news(events=["PPI"], flatten_minutes_before=10)), "Europe/Paris", NOW))
 
-    assert "2026-12-10" not in days  # CPI not named
+    cpi = days["2026-12-10"]  # CPI not named: listed with the rule's minutes, blocking nothing
+    assert cpi["effect"] == "none"
+    assert (cpi["blocks"][0]["not_applied"], cpi["blocks"][0]["start"]) == ("not_named", "2026-12-10T13:20:00+00:00")
     ppi = days["2026-12-15"]["blocks"][0]
-    assert (ppi["event"], ppi["flat_from"], ppi["start"], ppi["end"]) == (
-        "PPI", "2026-12-15T13:20:00+00:00", "2026-12-15T13:20:00+00:00", "2026-12-15T13:45:00+00:00")
+    assert days["2026-12-15"]["effect"] == "window"
+    assert (ppi["event"], ppi["applies"], ppi["flat_from"], ppi["start"], ppi["end"]) == (
+        "PPI", True, "2026-12-15T13:20:00+00:00", "2026-12-15T13:20:00+00:00", "2026-12-15T13:45:00+00:00")
 
 
 def test_a_release_on_a_closed_day_leaves_the_day_closed():
     good_friday = by_day(blocked_days(rules(news()), "Europe/Paris", NOW))["2026-04-03"]
 
     assert good_friday["effect"] == "closed"
-    assert [(block["kind"], block.get("event")) for block in good_friday["blocks"]] == [
-        ("us_closed", None), ("release", "NFP")]
+    assert [(block["kind"], block.get("event"), block.get("applies")) for block in good_friday["blocks"]] == [
+        ("us_closed", None, None), ("release", "NFP", True)]
 
 
 def test_today_is_the_market_timezone_s_day():
@@ -171,9 +190,12 @@ def test_a_calendar_that_cannot_be_read_is_said_and_the_rest_still_listed(monkey
 @pytest.mark.parametrize("config", [{"minutes_before": 500}, {"events": ["ISM"]}, "not an object"])
 def test_a_macro_news_rule_the_trader_would_refuse_is_said(config):
     answer = blocked_days(rules({"rule_type": "macro_news", "rule_config": config}), "Europe/Paris", NOW)
+    releases = [block for day in answer["days"] for block in day["blocks"] if block["kind"] == "release"]
 
-    assert answer["news"]["on"] is True and answer["news"]["readable"] is False
-    assert all(block["kind"] != "release" for day in answer["days"] for block in day["blocks"])
+    assert answer["news"]["on"] is True and answer["news"]["rule_error"].startswith("macro_news:")
+    assert answer["news"]["readable"] is True  # the calendar itself was read
+    assert releases and all(block["not_applied"] == "rule_error" for block in releases)
+    assert all(day["effect"] != "window" for day in answer["days"])
 
 
 def test_the_answer_is_plain_json():

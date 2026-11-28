@@ -1,7 +1,7 @@
 // A Market calendar answer (GET /api/market-calendar) for the tests: yesterday's Thanksgiving, today's early close,
-// a CPI window and Christmas, today being Friday 27 November 2026 in Paris.
+// a CPI window, a PPI the rule does not name and Christmas, today being Friday 27 November 2026 in Paris.
 
-import type { BlockedDay, MarketCalendar } from '@/lib/types'
+import type { BlockedDay, MarketCalendar, ReleaseBlock } from '@/lib/types'
 
 export const THANKSGIVING: BlockedDay = {
   day: '2026-11-26',
@@ -26,7 +26,18 @@ export const CPI: BlockedDay = {
   effect: 'window',
   blocks: [{
     kind: 'release', event: 'CPI', covers: '2026-11', time_new_york: '08:30', released_at: '2026-12-10T13:30:00+00:00',
-    start: '2026-12-10T13:25:00+00:00', end: '2026-12-10T13:45:00+00:00',
+    start: '2026-12-10T13:25:00+00:00', end: '2026-12-10T13:45:00+00:00', applies: true,
+  }],
+}
+
+/** A release the rule does not name: listed, blocking nothing. */
+export const PPI: BlockedDay = {
+  day: '2026-12-15',
+  weekday: 2,
+  effect: 'none',
+  blocks: [{
+    kind: 'release', event: 'PPI', covers: '2026-11', time_new_york: '08:30', released_at: '2026-12-15T13:30:00+00:00',
+    start: '2026-12-15T13:25:00+00:00', end: '2026-12-15T13:45:00+00:00', applies: false, not_applied: 'not_named',
   }],
 }
 
@@ -56,10 +67,27 @@ export function marketCalendar(changes: Partial<MarketCalendar> = {}): MarketCal
       link: { config: { group: 'hours', path: 'trade.rules[market_closed_dates].rule_config.market_closed_dates', block: 'closed' } },
     },
     news: {
-      on: true, readable: true, events: ['FOMC', 'CPI', 'NFP', 'PCE'], known_from: '2024-01-31', known_until: '2027-12-03',
-      upkeep: null, link: { config: { group: 'hours', path: 'trade.rules[macro_news].rule_config.minutes_before', block: 'news' } },
+      on: true, readable: true, rule_error: null, events: ['FOMC', 'CPI', 'NFP', 'PCE'],
+      all_events: ['FOMC', 'CPI', 'NFP', 'PCE', 'PPI', 'RETAIL', 'GDP', 'JOLTS'], default_events: ['FOMC', 'CPI', 'NFP', 'PCE'],
+      known_from: '2024-01-31', known_until: '2027-12-03', upkeep: null,
+      link: { config: { group: 'hours', path: 'trade.rules[macro_news].rule_config.minutes_before', block: 'news' } },
     },
-    days: [THANKSGIVING, DAY_AFTER, CPI, CHRISTMAS_EVE, NEW_YEAR],
+    days: [THANKSGIVING, DAY_AFTER, CPI, PPI, CHRISTMAS_EVE, NEW_YEAR],
     ...changes,
+  }
+}
+
+/** The same calendar as the server has it today: no macro_news rule, every release listed, none applied. */
+export function ruleOff(): MarketCalendar {
+  const calendar = marketCalendar()
+  const unapplied = (block: ReleaseBlock): ReleaseBlock => ({ ...block, applies: false, not_applied: 'rule_off' })
+  return {
+    ...calendar,
+    news: { ...calendar.news, on: false, events: [], upkeep: null },
+    days: calendar.days.map((day) =>
+      day.blocks.some((block) => block.kind === 'release')
+        ? { ...day, effect: 'none', blocks: day.blocks.map((block) => (block.kind === 'release' ? unapplied(block) : block)) }
+        : day,
+    ),
   }
 }

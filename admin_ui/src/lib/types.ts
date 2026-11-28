@@ -484,7 +484,10 @@ export interface ConfigClosedBlock {
   also_us: boolean
 }
 
-/** A US release the macro_news rule names: no entry from `start` to `end`; what is held sold from `flat_from`. */
+/**
+ * A US release of the calendar: no entry from `start` to `end` while it `applies` (the macro_news rule is on and names
+ * it), what is held sold from `flat_from`; the window it would have otherwise (the rule's minutes, else its defaults).
+ */
 export interface ReleaseBlock {
   kind: 'release'
   event: string
@@ -495,18 +498,22 @@ export interface ReleaseBlock {
   start: string
   end: string
   flat_from?: string
+  applies: boolean
+  /** Why it blocks nothing: the rule is not in config.json, does not name it, or cannot be read. */
+  not_applied?: 'rule_off' | 'not_named' | 'rule_error'
 }
 
 export type DayBlock = UsClosedBlock | UsEarlyCloseBlock | ConfigClosedBlock | ReleaseBlock
 
-export type DayEffect = 'closed' | 'early_close' | 'window'
+/** `none`: releases not applied alone, which block nothing. */
+export type DayEffect = 'closed' | 'early_close' | 'window' | 'none'
 
 export interface BlockedDay {
   /** "2026-11-26" */
   day: string
   /** ISO weekday, 1 Monday to 5 Friday (a closed date may be written on a weekend: 6, 7). */
   weekday: number
-  /** The strongest of its blocks: closed all day, closing early, or a window around a release. */
+  /** The strongest of its blocks: closed all day, closing early, a window around a release, or none of them. */
   effect: DayEffect
   /** Each reason, the strongest first. */
   blocks: DayBlock[]
@@ -523,8 +530,15 @@ export interface MarketCalendar {
   news: {
     /** Whether the macro_news rule is in config.json: without it, no release blocks anything. */
     on: boolean
+    /** Whether the calendar of releases could be read. */
     readable: boolean
+    /** The rule's error, when it is in config.json but cannot be read. */
+    rule_error: string | null
+    /** The releases the rule names (none while it is off). */
     events: string[]
+    /** Every kind the calendar keeps, and those a rule that names none would take. */
+    all_events: string[]
+    default_events: string[]
     known_from: string | null
     known_until: string | null
     upkeep: string | null
