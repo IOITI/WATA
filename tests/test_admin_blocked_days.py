@@ -72,7 +72,7 @@ def test_every_us_day_of_the_file_is_listed_and_no_weekend():
     assert blocking == {day.isoformat() for day in market_calendar.read_market_calendar().by_day}
     assert all(day["weekday"] <= 5 for day in answer["days"])
     assert listed == sorted(set(listed))
-    assert answer["us"] == {"readable": True, "until": "2027-12-31", "upkeep": None}
+    assert answer["us"] == {"readable": True, "until": "2028-12-31", "upkeep": None}
     assert answer["today"] == "2026-11-27"
 
 

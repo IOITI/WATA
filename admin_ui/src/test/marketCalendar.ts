@@ -60,7 +60,7 @@ export function marketCalendar(changes: Partial<MarketCalendar> = {}): MarketCal
     today: '2026-11-27',
     timezone: 'Europe/Paris',
     market_timezone: 'Europe/Paris',
-    us: { readable: true, until: '2027-12-31', upkeep: null },
+    us: { readable: true, until: '2028-12-31', upkeep: null },
     closed_dates: {
       count: 1,
       unreadable: [],
