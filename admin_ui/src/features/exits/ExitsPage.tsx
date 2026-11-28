@@ -4,6 +4,7 @@ import {
   DateRangeFilter,
   formatNumber,
   formatPercent,
+  KpiGrid,
   KpiTile,
   lastDays,
   PageHeader,
@@ -11,6 +12,12 @@ import {
   QueryState,
   rangeParams,
   SignedValue,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeaderCell,
+  TableRow,
 } from 'ioiti-ui'
 import type { DateRange } from 'ioiti-ui'
 import { useState } from 'react'
@@ -31,38 +38,36 @@ function GroupTable<T extends GroupStats>({
   label: (group: T) => string
 }) {
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full min-w-[36rem] text-left text-xs">
-        <thead className="text-muted-foreground">
-          <tr>
-            <th className="py-2 pr-4 font-medium">{header}</th>
-            <th className="py-2 pr-4 text-right font-medium">Trades</th>
-            <th className="py-2 pr-4 text-right font-medium">Won</th>
-            <th className="py-2 pr-4 text-right font-medium">Average result</th>
-            <th className="py-2 pr-4 text-right font-medium">Average best level</th>
-            <th className="py-2 text-right font-medium">Profit / loss</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-border/40">
-          {groups.map((group) => (
-            <tr key={label(group)}>
-              <td className="py-2.5 pr-4 font-medium">{label(group)}</td>
-              <td className="py-2.5 pr-4 text-right tabular-nums">{group.trade_count}</td>
-              <td className="py-2.5 pr-4 text-right tabular-nums">{formatPercent(group.win_rate, false, 0)}</td>
-              <td className="py-2.5 pr-4 text-right">
-                <SignedValue value={group.average_percent} kind="percent" />
-              </td>
-              <td className="py-2.5 pr-4 text-right">
-                <SignedValue value={group.average_best_percent} kind="percent" />
-              </td>
-              <td className="py-2.5 text-right">
-                <SignedValue value={group.profit_loss} kind="money" />
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <Table density="compact" className="min-w-[36rem]">
+      <TableHead>
+        <TableRow>
+          <TableHeaderCell>{header}</TableHeaderCell>
+          <TableHeaderCell numeric>Trades</TableHeaderCell>
+          <TableHeaderCell numeric>Won</TableHeaderCell>
+          <TableHeaderCell numeric>Average result</TableHeaderCell>
+          <TableHeaderCell numeric>Average best level</TableHeaderCell>
+          <TableHeaderCell numeric>Profit / loss</TableHeaderCell>
+        </TableRow>
+      </TableHead>
+      <TableBody>
+        {groups.map((group) => (
+          <TableRow key={label(group)}>
+            <TableCell className="font-medium">{label(group)}</TableCell>
+            <TableCell numeric>{group.trade_count}</TableCell>
+            <TableCell numeric>{formatPercent(group.win_rate, false, 0)}</TableCell>
+            <TableCell className="text-right">
+              <SignedValue value={group.average_percent} kind="percent" />
+            </TableCell>
+            <TableCell className="text-right">
+              <SignedValue value={group.average_best_percent} kind="percent" />
+            </TableCell>
+            <TableCell className="text-right">
+              <SignedValue value={group.profit_loss} kind="money" />
+            </TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
   )
 }
 
@@ -83,7 +88,7 @@ function ExitsContent({ exits }: { exits: Exits }) {
 
   return (
     <>
-      <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
+      <KpiGrid>
         <KpiTile
           label="Average result"
           value={<SignedValue value={summary.average_percent} kind="percent" className="font-semibold" />}
@@ -104,7 +109,7 @@ function ExitsContent({ exits }: { exits: Exits }) {
           value={formatPercent(summary.turned_negative_percent, false, 0)}
           hint={`${summary.turned_negative_count} trades went positive, then closed negative`}
         />
-      </div>
+      </KpiGrid>
 
       <Panel
         title="By exit"

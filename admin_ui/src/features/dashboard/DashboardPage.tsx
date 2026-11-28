@@ -18,6 +18,7 @@ import {
   StatusBadge,
   toneOf,
   useNow,
+  KpiGrid,
 } from 'ioiti-ui'
 import { useMemo } from 'react'
 import { Link } from 'react-router'
@@ -378,11 +379,11 @@ export function DashboardPage() {
         error={overviewQuery.error}
         hasData={!!overview}
         skeleton={
-          <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
+          <KpiGrid>
             {[0, 1, 2, 3].map((index) => (
               <Skeleton key={index} className="h-[7.5rem] rounded-2xl" />
             ))}
-          </div>
+          </KpiGrid>
         }
       >
         {overview && (
@@ -396,12 +397,12 @@ export function DashboardPage() {
                 actionsEnabled={actionsEnabled}
               />
             )}
-            <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
+            <KpiGrid>
               <DayProfitTile overview={overview} />
               <DayPerformanceTile overview={overview} />
               <TradesTile overview={overview} />
               <NextEntryTile overview={overview} now={now} />
-            </div>
+            </KpiGrid>
             <MarketClocks timeZone={timezone} now={now} className="sm:hidden" />
 
             <Panel

@@ -15,6 +15,12 @@ import {
   QueryState,
   Dialog,
   useToast,
+  Table,
+  TableHead,
+  TableRow,
+  TableHeaderCell,
+  TableBody,
+  TableCell,
 } from 'ioiti-ui'
 import { useState } from 'react'
 import { Link } from 'react-router'
@@ -53,47 +59,45 @@ function Tokens({ tokens, onRevoke }: { tokens: McpToken[]; onRevoke: (token: Mc
   }
   return (
     // Positioned: the last column's name, for screen readers alone, stays in the frame that scrolls it.
-    <div className="relative overflow-x-auto">
-      <table className="w-full min-w-[34rem] text-left text-xs">
-        <thead className="text-muted-foreground">
-          <tr>
-            <th className="py-2 pr-4 font-medium">Token</th>
-            <th className="py-2 pr-4 font-medium">State</th>
-            <th className="py-2 pr-4 font-medium">Expires</th>
-            <th className="py-2 pr-4 font-medium">Last used</th>
-            <th className="py-2 font-medium">
-              <span className="sr-only">Revoke</span>
-            </th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-border/40">
-          {tokens.map((token) => (
-            <tr key={token.id}>
-              <td className="py-2.5 pr-4">
-                <span className="font-medium">{token.name}</span>
-                <span className="ml-2 font-mono text-muted-foreground">{token.id}</span>
-              </td>
-              <td className="py-2.5 pr-4">
-                <Badge tone={TOKEN_STATE[token.state].tone}>{TOKEN_STATE[token.state].label}</Badge>
-              </td>
-              <td className="py-2.5 pr-4 text-muted-foreground">
-                {token.state === 'revoked' ? '-' : formatRelative(token.expires_at)}
-              </td>
-              <td className="py-2.5 pr-4 text-muted-foreground">
-                {token.last_used_at ? formatRelative(token.last_used_at) : 'not since the admin started'}
-              </td>
-              <td className="py-2.5 text-right">
-                {token.state === 'active' && (
-                  <Button variant="ghost" size="sm" onClick={() => onRevoke(token)}>
-                    Revoke
-                  </Button>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <Table density="compact" className="min-w-[34rem]">
+      <TableHead>
+        <TableRow>
+          <TableHeaderCell>Token</TableHeaderCell>
+          <TableHeaderCell>State</TableHeaderCell>
+          <TableHeaderCell>Expires</TableHeaderCell>
+          <TableHeaderCell>Last used</TableHeaderCell>
+          <TableHeaderCell>
+            <span className="sr-only">Revoke</span>
+          </TableHeaderCell>
+        </TableRow>
+      </TableHead>
+      <TableBody>
+        {tokens.map((token) => (
+          <TableRow key={token.id}>
+            <TableCell>
+              <span className="font-medium">{token.name}</span>
+              <span className="ml-2 font-mono text-muted-foreground">{token.id}</span>
+            </TableCell>
+            <TableCell>
+              <Badge tone={TOKEN_STATE[token.state].tone}>{TOKEN_STATE[token.state].label}</Badge>
+            </TableCell>
+            <TableCell className="text-muted-foreground">
+              {token.state === 'revoked' ? '-' : formatRelative(token.expires_at)}
+            </TableCell>
+            <TableCell className="text-muted-foreground">
+              {token.last_used_at ? formatRelative(token.last_used_at) : 'not since the admin started'}
+            </TableCell>
+            <TableCell className="text-right">
+              {token.state === 'active' && (
+                <Button variant="ghost" size="sm" onClick={() => onRevoke(token)}>
+                  Revoke
+                </Button>
+              )}
+            </TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
   )
 }
 

@@ -1,0 +1,42 @@
+{
+  "about": "What this application wrote by hand that ioiti-ui has, as `npx ioiti-ui doctor --update-baseline` counted it: `doctor --check` lets no more in, and it only shrinks.",
+  "drift": {
+    "raw-table": {
+      "src/features/backtests/CapsPanel.tsx": 1,
+      "src/features/backtests/ConfigurationPage.tsx": 1,
+      "src/features/backtests/PropFirmPanel.tsx": 1,
+      "src/features/backtests/SweepPanel.tsx": 2,
+      "src/features/dashboard/DashboardPage.tsx": 1,
+      "src/features/data/QualityTab.tsx": 1,
+      "src/features/data/StatisticsTab.tsx": 1,
+      "src/features/market/MarketCalendarPage.tsx": 1,
+      "src/features/prices/GapsPanel.tsx": 1,
+      "src/features/ta/editor/TestResult.tsx": 1,
+      "src/features/ta/monitor/monitorPanels.tsx": 1,
+      "src/features/ta/signals/ComparisonPanel.tsx": 1,
+      "src/features/ta/signals/LiveCheckPanel.tsx": 1
+    },
+    "title": {
+      "src/features/backtests/DayPage.tsx": 1,
+      "src/features/backtests/ExperimentsPage.tsx": 1,
+      "src/features/backtests/RunsTable.tsx": 1,
+      "src/features/backtests/SweepPanel.tsx": 1,
+      "src/features/backtests/formSteps.tsx": 1,
+      "src/features/backtests/runTables.tsx": 5,
+      "src/features/dashboard/DashboardPage.tsx": 2,
+      "src/features/data/HistoryPanel.tsx": 1,
+      "src/features/data/ProvidersPage.tsx": 1,
+      "src/features/live/NotificationToggle.tsx": 1,
+      "src/features/positions/OrdersPage.tsx": 1,
+      "src/features/positions/columns.tsx": 1,
+      "src/features/prices/RangeControl.tsx": 1,
+      "src/features/ta/IndicatorsPage.tsx": 3,
+      "src/features/ta/chart/TaChart.tsx": 2,
+      "src/features/ta/editor/TestPanel.tsx": 1,
+      "src/features/ta/editor/TestResult.tsx": 1,
+      "src/features/ta/monitor/monitorPanels.tsx": 1,
+      "src/features/ta/signals/ComparisonPanel.tsx": 2,
+      "src/features/ta/signals/SignalJournal.tsx": 1
+    }
+  }
+}

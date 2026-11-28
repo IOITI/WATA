@@ -1,4 +1,4 @@
-import { ActivityHeatmap, formatMoney, formatNumber, formatPercent, SignedValue } from 'ioiti-ui'
+import { ActivityHeatmap, formatMoney, formatNumber, formatPercent, SignedValue, Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } from 'ioiti-ui'
 
 import type { DailyPerformance, WeekdayHourStats } from '@/lib/types'
 
@@ -37,32 +37,30 @@ export function WeekdayHourHeatmap({ rows, label }: { rows: WeekdayHourStats[]; 
         <summary className="w-fit cursor-pointer rounded-md text-muted-foreground hover:text-foreground">
           The figures as a table
         </summary>
-        <div className="mt-3 overflow-x-auto">
-          <table className="w-full min-w-[26rem] text-left text-xs">
-            <thead className="text-muted-foreground">
-              <tr>
-                <th scope="col" className="py-2 pr-4 font-medium">Opened</th>
-                <th scope="col" className="py-2 pr-4 text-right font-medium">Trades</th>
-                <th scope="col" className="py-2 pr-4 text-right font-medium">Won</th>
-                <th scope="col" className="py-2 text-right font-medium">Profit / loss</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border/40">
-              {listed.map((row) => (
-                <tr key={`${row.weekday}:${row.hour}`}>
-                  <th scope="row" className="py-2 pr-4 font-normal">
-                    {weekdayName(row.weekday)}, {String(row.hour).padStart(2, '0')}:00
-                  </th>
-                  <td className="py-2 pr-4 text-right tabular-nums">{formatNumber(row.trade_count)}</td>
-                  <td className="py-2 pr-4 text-right tabular-nums">{formatPercent(row.win_rate, false, 0)}</td>
-                  <td className="py-2 text-right">
-                    <SignedValue value={row.profit_loss} kind="money" />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <Table density="compact" wrapperClassName="mt-3" className="min-w-[26rem]">
+          <TableHead>
+            <TableRow>
+              <TableHeaderCell scope="col">Opened</TableHeaderCell>
+              <TableHeaderCell numeric scope="col">Trades</TableHeaderCell>
+              <TableHeaderCell numeric scope="col">Won</TableHeaderCell>
+              <TableHeaderCell numeric scope="col">Profit / loss</TableHeaderCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {listed.map((row) => (
+              <TableRow key={`${row.weekday}:${row.hour}`}>
+                <TableHeaderCell scope="row" className="font-normal">
+                  {weekdayName(row.weekday)}, {String(row.hour).padStart(2, '0')}:00
+                </TableHeaderCell>
+                <TableCell numeric className="py-2">{formatNumber(row.trade_count)}</TableCell>
+                <TableCell numeric className="py-2">{formatPercent(row.win_rate, false, 0)}</TableCell>
+                <TableCell className="py-2 text-right">
+                  <SignedValue value={row.profit_loss} kind="money" />
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
       </details>
     </div>
   )

@@ -4,7 +4,7 @@
 // rule's bars. GET /api/ta/rules/{id}/live-check/days/{day}, and the rule's day (GET /api/ta/rules/{id}/days/{day}/indicator).
 
 import { useQuery } from '@tanstack/react-query'
-import { Badge, ButtonLink, formatDay, formatTime, KpiStrip, PageHeader, Panel, QueryState, Skeleton } from 'ioiti-ui'
+import { Badge, ButtonLink, formatDay, formatTime, KpiStrip, PageHeader, Panel, QueryState, Skeleton, Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } from 'ioiti-ui'
 import { lazy, Suspense, useMemo } from 'react'
 import { Link, useParams } from 'react-router'
 
@@ -60,62 +60,60 @@ function RunsOfTheDay({ found }: { found: LiveCheckDay }) {
 function Signals({ found, timeZone }: { found: LiveCheckDay; timeZone: string }) {
   const tracks = TRACKS.filter((track) => found.present.includes(track))
   return (
-    <div className="relative overflow-x-auto">
-      <table className="w-full min-w-[44rem] text-left text-xs">
-        <caption className="sr-only">Each signal of the day on each track</caption>
-        <thead className="text-muted-foreground">
-          <tr>
-            <th className="py-2 pr-4 font-medium">Bar</th>
-            <th className="py-2 pr-4 font-medium">Alert</th>
-            {tracks.map((track) => (
-              <th key={track} className="py-2 pr-4 font-medium">{TRACK_LABEL[track]}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-border/40">
-          {found.signals.map((signal) => (
-            <tr key={signal.key} className="align-top">
-              <td className="py-2 pr-4 tabular-nums">
-                {time(signal.at, timeZone)}
-                {signal.near && <div className="text-muted-foreground">the engine’s bar {signal.near.seconds > 0 ? '+' : ''}{signal.near.seconds} s</div>}
-              </td>
-              <td className="py-2 pr-4">
-                {signal.title}
-                <div className="text-muted-foreground">{signal.action}</div>
-              </td>
-              {tracks.map((track) => {
-                const side = signal[track]
-                const times = track === 'live' ? liveTimesSaid(side) : null
-                return (
-                  <td key={track} className="py-2 pr-4">
-                    {fateSaid(side)}
-                    {times && <div className="text-muted-foreground">{times}</div>}
-                    {track === 'live' && side?.ref && (
-                      <div className="flex flex-wrap gap-x-3 text-muted-foreground">
-                        <Link to={signalLink(side.ref)} className="underline underline-offset-2 hover:text-foreground">
-                          Its way, moment by moment
-                        </Link>
-                        {side.position_id && (
-                          <span>
-                            Position{' '}
-                            <PositionPeekLink id={side.position_id} className="font-mono underline underline-offset-2">
-                              {side.position_id}
-                            </PositionPeekLink>
-                          </span>
-                        )}
-                      </div>
-                    )}
-                    {!side && signal.why_not_raised && (track === 'paper' || track === 'live') && (
-                      <div className="text-muted-foreground">{signal.why_not_raised}</div>
-                    )}
-                  </td>
-                )
-              })}
-            </tr>
+    <Table density="compact" className="min-w-[44rem]">
+      <caption className="sr-only">Each signal of the day on each track</caption>
+      <TableHead>
+        <TableRow>
+          <TableHeaderCell>Bar</TableHeaderCell>
+          <TableHeaderCell>Alert</TableHeaderCell>
+          {tracks.map((track) => (
+            <TableHeaderCell key={track}>{TRACK_LABEL[track]}</TableHeaderCell>
           ))}
-        </tbody>
-      </table>
-    </div>
+        </TableRow>
+      </TableHead>
+      <TableBody>
+        {found.signals.map((signal) => (
+          <TableRow key={signal.key} className="align-top">
+            <TableCell className="py-2 tabular-nums">
+              {time(signal.at, timeZone)}
+              {signal.near && <div className="text-muted-foreground">the engine’s bar {signal.near.seconds > 0 ? '+' : ''}{signal.near.seconds} s</div>}
+            </TableCell>
+            <TableCell className="py-2">
+              {signal.title}
+              <div className="text-muted-foreground">{signal.action}</div>
+            </TableCell>
+            {tracks.map((track) => {
+              const side = signal[track]
+              const times = track === 'live' ? liveTimesSaid(side) : null
+              return (
+                <TableCell key={track} className="py-2">
+                  {fateSaid(side)}
+                  {times && <div className="text-muted-foreground">{times}</div>}
+                  {track === 'live' && side?.ref && (
+                    <div className="flex flex-wrap gap-x-3 text-muted-foreground">
+                      <Link to={signalLink(side.ref)} className="underline underline-offset-2 hover:text-foreground">
+                        Its way, moment by moment
+                      </Link>
+                      {side.position_id && (
+                        <span>
+                          Position{' '}
+                          <PositionPeekLink id={side.position_id} className="font-mono underline underline-offset-2">
+                            {side.position_id}
+                          </PositionPeekLink>
+                        </span>
+                      )}
+                    </div>
+                  )}
+                  {!side && signal.why_not_raised && (track === 'paper' || track === 'live') && (
+                    <div className="text-muted-foreground">{signal.why_not_raised}</div>
+                  )}
+                </TableCell>
+              )
+            })}
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
   )
 }
 
@@ -123,56 +121,54 @@ function Trades({ found, timeZone }: { found: LiveCheckDay; timeZone: string }) 
   const tracks = TRACKS.filter((track) => found.present.includes(track))
   if (found.trades.length === 0) return <p className="text-sm text-muted-foreground">No trade on any track that day.</p>
   return (
-    <div className="relative overflow-x-auto">
-      <table className="w-full min-w-[44rem] text-left text-xs">
-        <caption className="sr-only">Each trade of the day on each track</caption>
-        <thead className="text-muted-foreground">
-          <tr>
-            <th className="py-2 pr-4 font-medium">Signal</th>
-            {tracks.map((track) => (
-              <th key={track} className="py-2 pr-4 font-medium">{TRACK_LABEL[track]}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-border/40">
-          {found.trades.map((row) => (
-            <tr key={row.key} className="align-top">
-              <td className="py-2 pr-4">
-                <span className="tabular-nums">{time(row.at, timeZone)}</span> {row.title}
-                {row.same_turbo === false && <div><Badge tone="warning">Another turbo live</Badge></div>}
-              </td>
-              {tracks.map((track) => {
-                const trade = row[track]
-                const apart = track !== 'paper' ? apartSaid(trade, row.paper) : null
-                return (
-                  <td key={track} className="py-2 pr-4">
-                    {trade ? (
-                      <>
-                        <div className="tabular-nums">{tradeSaid(trade)}</div>
-                        <div className="text-muted-foreground">
-                          {time(trade.filled_at, timeZone)} to {time(trade.exit_at, timeZone)}, {trade.exit_group}
-                        </div>
-                        {track === 'live' && trade.decided_price != null && (
-                          <div className="text-muted-foreground">its sale decided at {trade.decided_price}</div>
-                        )}
-                        {apart && <div className="text-muted-foreground">{apart}</div>}
-                        {track === 'live' && trade.id != null && (
-                          <Link className="underline-offset-2 hover:underline" to={positionLink(String(trade.id))}>
-                            The position
-                          </Link>
-                        )}
-                      </>
-                    ) : (
-                      <span className="text-muted-foreground">—</span>
-                    )}
-                  </td>
-                )
-              })}
-            </tr>
+    <Table density="compact" className="min-w-[44rem]">
+      <caption className="sr-only">Each trade of the day on each track</caption>
+      <TableHead>
+        <TableRow>
+          <TableHeaderCell>Signal</TableHeaderCell>
+          {tracks.map((track) => (
+            <TableHeaderCell key={track}>{TRACK_LABEL[track]}</TableHeaderCell>
           ))}
-        </tbody>
-      </table>
-    </div>
+        </TableRow>
+      </TableHead>
+      <TableBody>
+        {found.trades.map((row) => (
+          <TableRow key={row.key} className="align-top">
+            <TableCell className="py-2">
+              <span className="tabular-nums">{time(row.at, timeZone)}</span> {row.title}
+              {row.same_turbo === false && <div><Badge tone="warning">Another turbo live</Badge></div>}
+            </TableCell>
+            {tracks.map((track) => {
+              const trade = row[track]
+              const apart = track !== 'paper' ? apartSaid(trade, row.paper) : null
+              return (
+                <TableCell key={track} className="py-2">
+                  {trade ? (
+                    <>
+                      <div className="tabular-nums">{tradeSaid(trade)}</div>
+                      <div className="text-muted-foreground">
+                        {time(trade.filled_at, timeZone)} to {time(trade.exit_at, timeZone)}, {trade.exit_group}
+                      </div>
+                      {track === 'live' && trade.decided_price != null && (
+                        <div className="text-muted-foreground">its sale decided at {trade.decided_price}</div>
+                      )}
+                      {apart && <div className="text-muted-foreground">{apart}</div>}
+                      {track === 'live' && trade.id != null && (
+                        <Link className="underline-offset-2 hover:underline" to={positionLink(String(trade.id))}>
+                          The position
+                        </Link>
+                      )}
+                    </>
+                  ) : (
+                    <span className="text-muted-foreground">—</span>
+                  )}
+                </TableCell>
+              )
+            })}
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
   )
 }
 

@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { Button, formatMoney, formatNumber, formatPercent, FunnelChart, KpiTile, Panel, QueryState, SignedValue } from 'ioiti-ui'
+import { Button, formatMoney, formatNumber, formatPercent, FunnelChart, KpiTile, Panel, QueryState, SignedValue, Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } from 'ioiti-ui'
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 
@@ -359,36 +359,34 @@ export function BreakdownsPanel({ runId }: { runId: string }) {
                   unit="money"
                   more={(group) => [{ label: 'Per trade', value: formatPercent(group.average_percent, true) }]}
                 />
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs">
-                    <thead className="text-muted-foreground">
-                      <tr>
-                        <th scope="col" className="py-2 pr-4 font-medium">{chosen.label}</th>
-                        <th scope="col" className="py-2 pr-4 text-right font-medium">Trades</th>
-                        <th scope="col" className="py-2 pr-4 text-right font-medium">Winning</th>
-                        <th scope="col" className="py-2 pr-4 text-right font-medium">Per trade</th>
-                        <th scope="col" className="py-2 pr-4 text-right font-medium">Best level, on average</th>
-                        <th scope="col" className="py-2 text-right font-medium">In money</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-border/40">
-                      {groups.map((group) => (
-                        <tr key={nameOf(group)}>
-                          <th scope="row" className="py-2.5 pr-4 font-normal">{nameOf(group)}</th>
-                          <td className="py-2.5 pr-4 text-right tabular-nums">{formatNumber(group.trade_count)}</td>
-                          <td className="py-2.5 pr-4 text-right tabular-nums">{formatPercent(group.win_rate, false, 0)}</td>
-                          <td className="py-2.5 pr-4 text-right">
-                            <SignedValue value={group.average_percent} kind="percent" />
-                          </td>
-                          <td className="py-2.5 pr-4 text-right tabular-nums">{formatPercent(group.average_best_percent, true)}</td>
-                          <td className="py-2.5 text-right">
-                            <SignedValue value={group.profit_loss} kind="money" />
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                <Table density="compact">
+                  <TableHead>
+                    <TableRow>
+                      <TableHeaderCell scope="col">{chosen.label}</TableHeaderCell>
+                      <TableHeaderCell numeric scope="col">Trades</TableHeaderCell>
+                      <TableHeaderCell numeric scope="col">Winning</TableHeaderCell>
+                      <TableHeaderCell numeric scope="col">Per trade</TableHeaderCell>
+                      <TableHeaderCell numeric scope="col">Best level, on average</TableHeaderCell>
+                      <TableHeaderCell numeric scope="col">In money</TableHeaderCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {groups.map((group) => (
+                      <TableRow key={nameOf(group)}>
+                        <TableHeaderCell scope="row" className="py-2.5 font-normal">{nameOf(group)}</TableHeaderCell>
+                        <TableCell numeric>{formatNumber(group.trade_count)}</TableCell>
+                        <TableCell numeric>{formatPercent(group.win_rate, false, 0)}</TableCell>
+                        <TableCell className="text-right">
+                          <SignedValue value={group.average_percent} kind="percent" />
+                        </TableCell>
+                        <TableCell numeric>{formatPercent(group.average_best_percent, true)}</TableCell>
+                        <TableCell className="text-right">
+                          <SignedValue value={group.profit_loss} kind="money" />
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
                 <p className="text-xs text-muted-foreground">
                   Given back from the best level seen to the sale: {formatPercent(breakdowns.given_back.average_given_back, false)} on average;{' '}
                   {breakdowns.given_back.turned_negative_count} trade{breakdowns.given_back.turned_negative_count === 1 ? '' : 's'} (

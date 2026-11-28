@@ -1,5 +1,5 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
-import { cn, KpiTile, Panel, QueryState } from 'ioiti-ui'
+import { cn, KpiTile, Panel, QueryState, Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } from 'ioiti-ui'
 
 import { api } from '@/lib/api'
 import type { DateRangeParams } from '@/lib/api'
@@ -41,30 +41,28 @@ export function ExecutionLedgerPanel({ params }: { params: DateRangeParams }) {
                 ))}
               </div>
               {ledger.by_exit.length > 0 && (
-                <div className="relative overflow-x-auto">
-                  <table className="w-full min-w-[30rem] text-left text-xs">
-                    <thead className="text-muted-foreground">
-                      <tr>
-                        <th className="py-2 pr-4 font-medium">By exit</th>
-                        <th className="py-2 pr-4 text-right font-medium">Trades</th>
-                        <th className="py-2 pr-4 text-right font-medium">Result, typical</th>
-                        <th className="py-2 pr-4 text-right font-medium">Cost, typical</th>
-                        <th className="py-2 text-right font-medium">Exit slippage</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-border/40">
-                      {ledgerLines(ledger.by_exit).map((line) => (
-                        <tr key={line.group}>
-                          <td className="py-2.5 pr-4 font-medium">{line.group}</td>
-                          <td className="py-2.5 pr-4 text-right tabular-nums">{line.trades}</td>
-                          <td className="py-2.5 pr-4 text-right tabular-nums">{line.result}</td>
-                          <td className={cn('py-2.5 pr-4 text-right tabular-nums', TONES[line.costTone])}>{line.cost}</td>
-                          <td className={cn('py-2.5 text-right tabular-nums', TONES[line.exitTone])}>{line.exit}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                <Table density="compact" className="min-w-[30rem]">
+                  <TableHead>
+                    <TableRow>
+                      <TableHeaderCell>By exit</TableHeaderCell>
+                      <TableHeaderCell numeric>Trades</TableHeaderCell>
+                      <TableHeaderCell numeric>Result, typical</TableHeaderCell>
+                      <TableHeaderCell numeric>Cost, typical</TableHeaderCell>
+                      <TableHeaderCell numeric>Exit slippage</TableHeaderCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {ledgerLines(ledger.by_exit).map((line) => (
+                      <TableRow key={line.group}>
+                        <TableCell className="font-medium">{line.group}</TableCell>
+                        <TableCell numeric>{line.trades}</TableCell>
+                        <TableCell numeric>{line.result}</TableCell>
+                        <TableCell numeric className={cn(TONES[line.costTone])}>{line.cost}</TableCell>
+                        <TableCell numeric className={cn(TONES[line.exitTone])}>{line.exit}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
               )}
               <p className="text-xs text-muted-foreground">
                 {deliveryText(ledger.by_source) ? `Signals reached WATA in, typically: ${deliveryText(ledger.by_source)}. ` : ''}

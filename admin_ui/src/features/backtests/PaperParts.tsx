@@ -13,6 +13,12 @@ import {
   KpiGrid,
   KpiTile,
   SignedValue,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeaderCell,
+  TableRow,
 } from 'ioiti-ui'
 import { FileText, RotateCcw } from 'lucide-react'
 import { Link } from 'react-router'
@@ -153,37 +159,35 @@ function dayResult(day: BacktestPaperDay) {
 export function PaperDays({ days, madeAgain }: { days: BacktestPaperDay[]; madeAgain: boolean }) {
   if (days.length === 0) return <p className="py-4 text-center text-sm text-muted-foreground">No day on paper yet: the first comes once the market is closed.</p>
   return (
-    <div className="relative overflow-x-auto">
-      <table className="w-full min-w-[26rem] text-left text-xs">
-        <caption className="sr-only">Its days on paper, newest first</caption>
-        <thead className="text-muted-foreground">
-          <tr>
-            <th className="py-2 pr-4 font-medium">Day</th>
-            <th className="py-2 pr-4 text-right font-medium">On paper</th>
-            <th className="py-2 text-right font-medium">Trades</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-border/40">
-          {days.map((day) => (
-            <tr key={day.day}>
-              <td className="py-2.5 pr-4 font-medium">
-                <span className="inline-flex items-center gap-2">
-                  {day.run_id ? (
-                    <Link className="underline-offset-2 hover:underline" to={`/backtests/${day.run_id}`}>
-                      {formatDay(day.day)}
-                    </Link>
-                  ) : (
-                    formatDay(day.day)
-                  )}
-                  {day.stale && <OlderCodeBadge madeWith={day.made_with} madeAgain={madeAgain} />}
-                </span>
-              </td>
-              <td className="py-2.5 pr-4 text-right">{dayResult(day)}</td>
-              <td className="py-2.5 text-right tabular-nums">{day.trades ?? '—'}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <Table density="compact" className="min-w-[26rem]">
+      <caption className="sr-only">Its days on paper, newest first</caption>
+      <TableHead>
+        <TableRow>
+          <TableHeaderCell>Day</TableHeaderCell>
+          <TableHeaderCell numeric>On paper</TableHeaderCell>
+          <TableHeaderCell numeric>Trades</TableHeaderCell>
+        </TableRow>
+      </TableHead>
+      <TableBody>
+        {days.map((day) => (
+          <TableRow key={day.day}>
+            <TableCell className="font-medium">
+              <span className="inline-flex items-center gap-2">
+                {day.run_id ? (
+                  <Link className="underline-offset-2 hover:underline" to={`/backtests/${day.run_id}`}>
+                    {formatDay(day.day)}
+                  </Link>
+                ) : (
+                  formatDay(day.day)
+                )}
+                {day.stale && <OlderCodeBadge madeWith={day.made_with} madeAgain={madeAgain} />}
+              </span>
+            </TableCell>
+            <TableCell className="text-right">{dayResult(day)}</TableCell>
+            <TableCell numeric>{day.trades ?? '—'}</TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
   )
 }

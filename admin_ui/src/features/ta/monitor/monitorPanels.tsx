@@ -1,7 +1,7 @@
 // The parts of the Engine monitor that read a period: the rules' runs, the charts over time, the
 // delivery of the live signals and their results.
 
-import { AdvancedDataTable, Badge, formatDateTime, formatDay, formatNumber, formatPercent, formatWait, Meter, Panel, SignedValue } from 'ioiti-ui'
+import { AdvancedDataTable, Badge, formatDateTime, formatDay, formatNumber, formatPercent, formatWait, Meter, Panel, SignedValue, Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } from 'ioiti-ui'
 import type { ColumnDef } from 'ioiti-ui'
 import { useMemo } from 'react'
 import type { ReactNode } from 'react'
@@ -541,70 +541,68 @@ export function ResultsPanel({ rows, backtestsEnabled }: { rows: ResultRow[]; ba
       {rows.length === 0 ? (
         <p className="py-6 text-center text-sm text-muted-foreground">No position and no day on paper in this period.</p>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[40rem] text-left text-xs">
-            <thead className="text-muted-foreground">
-              <tr>
-                <th className="py-2 pr-4 font-medium">Rule</th>
-                <th className="py-2 pr-4 text-right font-medium">Positions</th>
-                <th className="py-2 pr-4 text-right font-medium">Won · lost</th>
-                <th className="py-2 pr-4 text-right font-medium">Result</th>
-                <th className="py-2 font-medium">On paper</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border/40">
-              {rows.map((row) => (
-                <tr key={row.rule_id}>
-                  <td className="py-2.5 pr-4">
-                    <span className="font-medium">
-                      {row.name ? <RulePeekName id={row.rule_id} name={row.name} /> : ruleName(row)}
-                    </span>
-                    {madeByClaude(row) && <ClaudeBadge className="ml-2" />}
-                    {row.mode && <p className="text-muted-foreground">{MODE_LABEL[row.mode]}</p>}
-                  </td>
-                  <td className="py-2.5 pr-4 text-right tabular-nums">
-                    {row.live ? (
-                      <>
-                        {formatNumber(row.live.positions)}
-                        {row.live.open > 0 && <p className="text-muted-foreground">{formatNumber(row.live.open)} open</p>}
-                      </>
-                    ) : (
-                      '—'
-                    )}
-                  </td>
-                  <td className="py-2.5 pr-4 text-right tabular-nums">
-                    {row.live ? `${formatNumber(row.live.won)} · ${formatNumber(row.live.lost)}` : '—'}
-                  </td>
-                  <td className="py-2.5 pr-4 text-right tabular-nums">
-                    {row.live?.profit_loss != null ? <SignedValue value={row.live.profit_loss} kind="money" currency="EUR" /> : '—'}
-                    {row.live?.average_percent != null && (
-                      <p className="text-muted-foreground">{formatPercent(row.live.average_percent, true)} a position</p>
-                    )}
-                  </td>
-                  <td className="py-2.5">
-                    {row.paper ? (
-                      <>
-                        {/* Every day on paper, and the report since it began, on the Paper trading page. */}
-                        <Link className="underline-offset-2 hover:underline" to={paperTradingHref(row.rule_id)}>
-                          {formatNumber(row.paper.days)} day{row.paper.days === 1 ? '' : 's'}, {formatPercent(row.paper.total, true)}
-                        </Link>
-                        {row.paper.last?.run_id && (
-                          <p>
-                            <Link className="text-muted-foreground underline-offset-2 hover:underline" to={`/backtests/${row.paper.last.run_id}`}>
-                              Last, {formatDay(row.paper.last.day, false)}: {formatPercent(row.paper.last.percent, true)}
-                            </Link>
-                          </p>
-                        )}
-                      </>
-                    ) : (
-                      <span className="text-muted-foreground">{row.mode === 'shadow' && !backtestsEnabled ? 'Needs the backtests' : '—'}</span>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <Table density="compact" className="min-w-[40rem]">
+          <TableHead>
+            <TableRow>
+              <TableHeaderCell>Rule</TableHeaderCell>
+              <TableHeaderCell numeric>Positions</TableHeaderCell>
+              <TableHeaderCell numeric>Won · lost</TableHeaderCell>
+              <TableHeaderCell numeric>Result</TableHeaderCell>
+              <TableHeaderCell>On paper</TableHeaderCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {rows.map((row) => (
+              <TableRow key={row.rule_id}>
+                <TableCell>
+                  <span className="font-medium">
+                    {row.name ? <RulePeekName id={row.rule_id} name={row.name} /> : ruleName(row)}
+                  </span>
+                  {madeByClaude(row) && <ClaudeBadge className="ml-2" />}
+                  {row.mode && <p className="text-muted-foreground">{MODE_LABEL[row.mode]}</p>}
+                </TableCell>
+                <TableCell numeric>
+                  {row.live ? (
+                    <>
+                      {formatNumber(row.live.positions)}
+                      {row.live.open > 0 && <p className="text-muted-foreground">{formatNumber(row.live.open)} open</p>}
+                    </>
+                  ) : (
+                    '—'
+                  )}
+                </TableCell>
+                <TableCell numeric>
+                  {row.live ? `${formatNumber(row.live.won)} · ${formatNumber(row.live.lost)}` : '—'}
+                </TableCell>
+                <TableCell numeric>
+                  {row.live?.profit_loss != null ? <SignedValue value={row.live.profit_loss} kind="money" currency="EUR" /> : '—'}
+                  {row.live?.average_percent != null && (
+                    <p className="text-muted-foreground">{formatPercent(row.live.average_percent, true)} a position</p>
+                  )}
+                </TableCell>
+                <TableCell>
+                  {row.paper ? (
+                    <>
+                      {/* Every day on paper, and the report since it began, on the Paper trading page. */}
+                      <Link className="underline-offset-2 hover:underline" to={paperTradingHref(row.rule_id)}>
+                        {formatNumber(row.paper.days)} day{row.paper.days === 1 ? '' : 's'}, {formatPercent(row.paper.total, true)}
+                      </Link>
+                      {row.paper.last?.run_id && (
+                        <p>
+                          <Link className="text-muted-foreground underline-offset-2 hover:underline" to={`/backtests/${row.paper.last.run_id}`}>
+                            Last, {formatDay(row.paper.last.day, false)}: {formatPercent(row.paper.last.percent, true)}
+                          </Link>
+                        </p>
+                      )}
+                    </>
+                  ) : (
+                    <span className="text-muted-foreground">{row.mode === 'shadow' && !backtestsEnabled ? 'Needs the backtests' : '—'}</span>
+                  )}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
       )}
     </Panel>
   )

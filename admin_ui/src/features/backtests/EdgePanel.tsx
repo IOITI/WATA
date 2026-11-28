@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { Alert, AlertDescription, Button, cn, formatNumber, Panel, QueryState } from 'ioiti-ui'
+import { Alert, AlertDescription, Button, cn, formatNumber, Panel, QueryState, Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } from 'ioiti-ui'
 import { useState } from 'react'
 
 import { api } from '@/lib/api'
@@ -31,60 +31,58 @@ function EdgeTables({ edge }: { edge: BacktestEdge }) {
   const splits = SPLITS.filter((entry) => available.includes(entry.id))
   return (
     <>
-      <div className="overflow-x-auto">
-        <table className="w-full whitespace-nowrap text-sm">
-          <thead>
-            <tr className="text-xs text-muted-foreground">
-              <th scope="col" className="p-2 text-left font-medium">
-                After
-              </th>
-              <th scope="col" className="p-2 text-right font-medium">
-                Signals
-              </th>
-              <th scope="col" className="p-2 text-right font-medium">
-                Moved, on average
-              </th>
-              <th scope="col" className="p-2 text-right font-medium">
-                Right
-              </th>
-              <th scope="col" className="p-2 text-right font-medium">
-                Best, worst on the way
-              </th>
-              <th scope="col" className="p-2 text-right font-medium">
-                t (apart)
-              </th>
-              <th scope="col" className="p-2 text-right font-medium">
-                At random
-              </th>
-              <th scope="col" className="p-2 text-right font-medium">
-                Draws beaten
-              </th>
-            </tr>
-          </thead>
-          <tbody className="tabular-nums">
-            {edge.horizons.map((row) => (
-              <tr key={row.minutes} className="border-t border-border/50">
-                <th scope="row" className="p-2 text-left font-medium">
-                  {horizonLabel(row.minutes)}
-                </th>
-                <td className="p-2 text-right">{formatNumber(row.signals)}</td>
-                <td className="p-2 text-right">
-                  <Move value={row.mean_bp} />
-                </td>
-                <td className="p-2 text-right">{row.hit_rate === null ? '-' : `${formatNumber(row.hit_rate, 0)} %`}</td>
-                <td className="p-2 text-right whitespace-nowrap">
-                  {basisPoints(row.best_bp)}, {basisPoints(row.worst_bp)}
-                </td>
-                <td className="p-2 text-right whitespace-nowrap">
-                  {row.t === null ? '-' : formatNumber(row.t, 1)} ({row.independent})
-                </td>
-                <td className="p-2 text-right">{basisPoints(row.random.mean_bp)}</td>
-                <td className="p-2 text-right">{row.random.beaten === null ? '-' : `${formatNumber(row.random.beaten, 1)} %`}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <Table density="dense">
+        <TableHead>
+          <TableRow>
+            <TableHeaderCell scope="col">
+              After
+            </TableHeaderCell>
+            <TableHeaderCell numeric scope="col">
+              Signals
+            </TableHeaderCell>
+            <TableHeaderCell numeric scope="col">
+              Moved, on average
+            </TableHeaderCell>
+            <TableHeaderCell numeric scope="col">
+              Right
+            </TableHeaderCell>
+            <TableHeaderCell numeric scope="col">
+              Best, worst on the way
+            </TableHeaderCell>
+            <TableHeaderCell numeric scope="col">
+              t (apart)
+            </TableHeaderCell>
+            <TableHeaderCell numeric scope="col">
+              At random
+            </TableHeaderCell>
+            <TableHeaderCell numeric scope="col">
+              Draws beaten
+            </TableHeaderCell>
+          </TableRow>
+        </TableHead>
+        <TableBody>
+          {edge.horizons.map((row) => (
+            <TableRow key={row.minutes} className="border-border/50">
+              <TableHeaderCell scope="row">
+                {horizonLabel(row.minutes)}
+              </TableHeaderCell>
+              <TableCell numeric>{formatNumber(row.signals)}</TableCell>
+              <TableCell numeric>
+                <Move value={row.mean_bp} />
+              </TableCell>
+              <TableCell numeric>{row.hit_rate === null ? '-' : `${formatNumber(row.hit_rate, 0)} %`}</TableCell>
+              <TableCell numeric className="whitespace-nowrap">
+                {basisPoints(row.best_bp)}, {basisPoints(row.worst_bp)}
+              </TableCell>
+              <TableCell numeric className="whitespace-nowrap">
+                {row.t === null ? '-' : formatNumber(row.t, 1)} ({row.independent})
+              </TableCell>
+              <TableCell numeric>{basisPoints(row.random.mean_bp)}</TableCell>
+              <TableCell numeric>{row.random.beaten === null ? '-' : `${formatNumber(row.random.beaten, 1)} %`}</TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
       <div className="flex flex-wrap gap-2" role="group" aria-label="Moves split by">
         {splits.map((entry) => (
           <Button key={entry.id} size="sm" variant={entry.id === split ? 'primary' : 'outline'} aria-pressed={entry.id === split} onClick={() => setSplit(entry.id)}>
@@ -92,40 +90,38 @@ function EdgeTables({ edge }: { edge: BacktestEdge }) {
           </Button>
         ))}
       </div>
-      <div className="overflow-x-auto">
-        <table className="w-full whitespace-nowrap text-sm" aria-label="Moves split">
-          <thead>
-            <tr className="text-xs text-muted-foreground">
-              <th scope="col" className="p-2 text-left font-medium">
-                {SPLITS.find((entry) => entry.id === split)?.label}
-              </th>
-              <th scope="col" className="p-2 text-right font-medium">
-                Signals
-              </th>
-              {edge.horizons.map((row) => (
-                <th key={row.minutes} scope="col" className="p-2 text-right font-medium">
-                  {horizonLabel(row.minutes)}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody className="tabular-nums">
-            {rows.map((row) => (
-              <tr key={row.label} className="border-t border-border/50">
-                <th scope="row" className="p-2 text-left font-medium">
-                  {row.label}
-                </th>
-                <td className="p-2 text-right">{formatNumber(row.signals)}</td>
-                {row.moves.map((value, index) => (
-                  <td key={edge.horizons[index].minutes} className="p-2 text-right">
-                    <Move value={value} />
-                  </td>
-                ))}
-              </tr>
+      <Table density="dense" aria-label="Moves split">
+        <TableHead>
+          <TableRow>
+            <TableHeaderCell scope="col">
+              {SPLITS.find((entry) => entry.id === split)?.label}
+            </TableHeaderCell>
+            <TableHeaderCell numeric scope="col">
+              Signals
+            </TableHeaderCell>
+            {edge.horizons.map((row) => (
+              <TableHeaderCell numeric key={row.minutes} scope="col">
+                {horizonLabel(row.minutes)}
+              </TableHeaderCell>
             ))}
-          </tbody>
-        </table>
-      </div>
+          </TableRow>
+        </TableHead>
+        <TableBody>
+          {rows.map((row) => (
+            <TableRow key={row.label} className="border-border/50">
+              <TableHeaderCell scope="row">
+                {row.label}
+              </TableHeaderCell>
+              <TableCell numeric>{formatNumber(row.signals)}</TableCell>
+              {row.moves.map((value, index) => (
+                <TableCell numeric key={edge.horizons[index].minutes}>
+                  <Move value={value} />
+                </TableCell>
+              ))}
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
     </>
   )
 }

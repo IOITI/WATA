@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { Alert, AlertDescription, Badge, formatMoney, formatRelative, PageHeader, Panel, QueryState } from 'ioiti-ui'
+import { Alert, AlertDescription, Badge, formatMoney, formatRelative, PageHeader, Panel, QueryState, Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } from 'ioiti-ui'
 import { useEffect, useState } from 'react'
 
 import { ActionBadge } from '@/components/status'
@@ -65,53 +65,51 @@ export function WatchlistPage() {
                 No indice is allowed in the configuration (rule <code>allowed_indices</code>).
               </p>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[44rem] text-left text-xs">
-                  <thead className="text-muted-foreground">
-                    <tr>
-                      <th className="py-2 pr-4 font-medium">Indice</th>
-                      <th className="py-2 pr-4 font-medium">Direction</th>
-                      <th className="py-2 pr-4 font-medium">Turbo</th>
-                      <th className="py-2 pr-4 text-right font-medium">Bid</th>
-                      <th className="py-2 pr-4 text-right font-medium">Ask</th>
-                      <th className="py-2 pr-4 font-medium">Price seen</th>
-                      <th className="py-2 pr-4 font-medium">Search refreshed</th>
-                      <th className="py-2 font-medium">State</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border/40">
-                    {watchlist.items.map((item) => (
-                      <tr key={`${item.indice}-${item.direction}`}>
-                        <td className="py-2.5 pr-4 font-medium">{item.indice}</td>
-                        <td className="py-2.5 pr-4">
-                          <ActionBadge action={item.direction} />
-                        </td>
-                        <td className="py-2.5 pr-4">
-                          {item.available ? (
-                            <>
-                              <p className="max-w-[22rem] truncate font-medium">{item.description ?? '—'}</p>
-                              {item.symbol && <p className="text-xs text-muted-foreground">{item.symbol}</p>}
-                            </>
-                          ) : (
-                            <span className="text-muted-foreground">—</span>
-                          )}
-                        </td>
-                        <td className="py-2.5 pr-4 text-right tabular-nums">
-                          {formatMoney(item.latest_bid, item.currency ?? 'EUR')}
-                        </td>
-                        <td className="py-2.5 pr-4 text-right tabular-nums">
-                          {formatMoney(item.latest_ask, item.currency ?? 'EUR')}
-                        </td>
-                        <td className="py-2.5 pr-4">{formatRelative(item.price_updated_at, now)}</td>
-                        <td className="py-2.5 pr-4">{formatRelative(item.search_refreshed_at, now)}</td>
-                        <td className="py-2.5">
-                          <StateBadge item={item} />
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <Table density="compact" className="min-w-[44rem]">
+                <TableHead>
+                  <TableRow>
+                    <TableHeaderCell>Indice</TableHeaderCell>
+                    <TableHeaderCell>Direction</TableHeaderCell>
+                    <TableHeaderCell>Turbo</TableHeaderCell>
+                    <TableHeaderCell numeric>Bid</TableHeaderCell>
+                    <TableHeaderCell numeric>Ask</TableHeaderCell>
+                    <TableHeaderCell>Price seen</TableHeaderCell>
+                    <TableHeaderCell>Search refreshed</TableHeaderCell>
+                    <TableHeaderCell>State</TableHeaderCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {watchlist.items.map((item) => (
+                    <TableRow key={`${item.indice}-${item.direction}`}>
+                      <TableCell className="font-medium">{item.indice}</TableCell>
+                      <TableCell>
+                        <ActionBadge action={item.direction} />
+                      </TableCell>
+                      <TableCell>
+                        {item.available ? (
+                          <>
+                            <p className="max-w-[22rem] truncate font-medium">{item.description ?? '—'}</p>
+                            {item.symbol && <p className="text-xs text-muted-foreground">{item.symbol}</p>}
+                          </>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </TableCell>
+                      <TableCell numeric>
+                        {formatMoney(item.latest_bid, item.currency ?? 'EUR')}
+                      </TableCell>
+                      <TableCell numeric>
+                        {formatMoney(item.latest_ask, item.currency ?? 'EUR')}
+                      </TableCell>
+                      <TableCell>{formatRelative(item.price_updated_at, now)}</TableCell>
+                      <TableCell>{formatRelative(item.search_refreshed_at, now)}</TableCell>
+                      <TableCell>
+                        <StateBadge item={item} />
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
             )}
           </Panel>
         )}

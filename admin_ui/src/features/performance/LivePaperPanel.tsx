@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { formatDay, Panel, QueryState, SignedValue } from 'ioiti-ui'
+import { formatDay, Panel, QueryState, SignedValue, Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } from 'ioiti-ui'
 import { Link } from 'react-router'
 
 import { paperReportHref, reportLine } from '@/features/backtests/paperModel'
@@ -46,44 +46,42 @@ export function LivePaperPanel({ enabled }: { enabled: boolean }) {
             {live.days.length === 0 ? (
               <p className="py-6 text-center text-sm text-muted-foreground">No paper day yet: the first come once the market is closed.</p>
             ) : (
-              <div className="relative overflow-x-auto">
-                <table className="w-full min-w-[30rem] text-left text-xs">
-                  <thead className="text-muted-foreground">
-                    <tr>
-                      <th className="py-2 pr-4 font-medium">Day</th>
-                      <th className="py-2 pr-4 text-right font-medium">Real</th>
-                      <th className="py-2 pr-4 text-right font-medium">On paper</th>
-                      <th className="py-2 text-right font-medium">Trades on paper</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border/40">
-                    {live.days.map((day: LivePaperDay) => (
-                      <tr key={day.day}>
-                        <td className="py-2.5 pr-4 font-medium">
-                          <span className="inline-flex items-center gap-2">
-                            {day.paper_run_id ? (
-                              <Link className="underline-offset-2 hover:underline" to={`/backtests/${day.paper_run_id}`}>
-                                {formatDay(day.day)}
-                              </Link>
-                            ) : (
-                              formatDay(day.day)
-                            )}
-                            {/* The signals received are traded on paper whatever the rules: made again. */}
-                            {day.paper_stale && <OlderCodeBadge madeWith={day.paper_made_with} madeAgain />}
-                          </span>
-                        </td>
-                        <td className="py-2.5 pr-4 text-right">
-                          <Result value={day.real_percent} />
-                        </td>
-                        <td className="py-2.5 pr-4 text-right">
-                          <Result value={day.paper_percent} word={paperState(day)} />
-                        </td>
-                        <td className="py-2.5 text-right tabular-nums">{day.paper_trades ?? '—'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <Table density="compact" className="min-w-[30rem]">
+                <TableHead>
+                  <TableRow>
+                    <TableHeaderCell>Day</TableHeaderCell>
+                    <TableHeaderCell numeric>Real</TableHeaderCell>
+                    <TableHeaderCell numeric>On paper</TableHeaderCell>
+                    <TableHeaderCell numeric>Trades on paper</TableHeaderCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {live.days.map((day: LivePaperDay) => (
+                    <TableRow key={day.day}>
+                      <TableCell className="font-medium">
+                        <span className="inline-flex items-center gap-2">
+                          {day.paper_run_id ? (
+                            <Link className="underline-offset-2 hover:underline" to={`/backtests/${day.paper_run_id}`}>
+                              {formatDay(day.day)}
+                            </Link>
+                          ) : (
+                            formatDay(day.day)
+                          )}
+                          {/* The signals received are traded on paper whatever the rules: made again. */}
+                          {day.paper_stale && <OlderCodeBadge madeWith={day.paper_made_with} madeAgain />}
+                        </span>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Result value={day.real_percent} />
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Result value={day.paper_percent} word={paperState(day)} />
+                      </TableCell>
+                      <TableCell numeric>{day.paper_trades ?? '—'}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
             )}
           </div>
         )}

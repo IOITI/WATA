@@ -363,6 +363,14 @@ jobs:
     - name: Lint
       run: npm run lint
 
+    # ioiti-ui's guide at the end of AGENTS.md is the installed version's (npx ioiti-ui guide ../AGENTS.md writes it).
+    - name: The guide
+      run: npm run guide
+
+    # No page writes by hand what ioiti-ui has, beyond what admin_ui/ioiti-doctor.json holds (npx ioiti-ui doctor says where).
+    - name: The doctor
+      run: npm run doctor
+
     - name: Type-check
       run: npm run typecheck
 

@@ -17,6 +17,12 @@ import {
   Panel,
   QueryState,
   Select,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeaderCell,
+  TableRow,
 } from 'ioiti-ui'
 import { useState } from 'react'
 import { Link } from 'react-router'
@@ -212,28 +218,26 @@ function Calibration({ check, timeZone }: { check: LiveCheck; timeZone: string }
       <h3 className="text-sm font-medium">What the live trades measure</h3>
       {now ? (
         <>
-          <div className="relative overflow-x-auto">
-            <table className="w-full min-w-[34rem] text-left text-xs">
-              <thead className="text-muted-foreground">
-                <tr>
-                  <th className="py-2 pr-4 font-medium">Setting</th>
-                  <th className="py-2 pr-4 font-medium">The backtest’s</th>
-                  <th className="py-2 pr-4 font-medium">Measured live</th>
-                  <th className="py-2 font-medium">In the calibrated run</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border/40">
-                {calibrationRows(now).map((row) => (
-                  <tr key={row.name}>
-                    <td className="py-2 pr-4 font-medium">{row.label}</td>
-                    <td className="py-2 pr-4 tabular-nums">{row.backtest}</td>
-                    <td className="py-2 pr-4 tabular-nums">{row.measured}</td>
-                    <td className="py-2">{row.applied ? <Badge tone="success">Taken</Badge> : <span className="text-muted-foreground">Kept</span>}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <Table density="compact" className="min-w-[34rem]">
+            <TableHead>
+              <TableRow>
+                <TableHeaderCell>Setting</TableHeaderCell>
+                <TableHeaderCell>The backtest’s</TableHeaderCell>
+                <TableHeaderCell>Measured live</TableHeaderCell>
+                <TableHeaderCell>In the calibrated run</TableHeaderCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {calibrationRows(now).map((row) => (
+                <TableRow key={row.name}>
+                  <TableCell className="py-2 font-medium">{row.label}</TableCell>
+                  <TableCell className="py-2 tabular-nums">{row.backtest}</TableCell>
+                  <TableCell className="py-2 tabular-nums">{row.measured}</TableCell>
+                  <TableCell className="py-2">{row.applied ? <Badge tone="success">Taken</Badge> : <span className="text-muted-foreground">Kept</span>}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
           {[...now.said, slippageSaid(now)].filter(Boolean).map((said) => (
             <p key={said} className="text-xs text-muted-foreground">{said}</p>
           ))}

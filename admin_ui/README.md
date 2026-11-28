@@ -139,7 +139,17 @@ pages.
   next comes, what arrives where a skeleton was fades in, dialogs grow from what opened them; the tables' filters
   are a filter group (a column's options a list opened from its button, a column of two an on/off pair); the
   check boxes draw their mark; the first Tab shows "Skip to the page".
-- **Since 0.4 the admin writes none of what the package has.** The Configuration page's bar of unsaved changes is
+- **What the package has is not written again here**, and its own commands hold that (ioiti-ui 1.0.0-rc.3):
+  `npx ioiti-ui doctor` says where a page wrote by hand what the package has (a `<table>` in the classes of a
+  `Table`, a grid of tiles in a `KpiGrid`'s, a `title` where a `Hint` says it), `npx ioiti-ui doctor --fix` writes a
+  table or a grid as the component with no class moving, and `ioiti-doctor.json` holds what is left by hand, which
+  only shrinks (`npm run doctor`, in CI; `npx ioiti-ui doctor --update-baseline` once one is gone). When it
+  came, 26 tables and 6 grids of tiles written by hand became `Table`s and `KpiGrid`s that way; 14 tables a `Table`
+  does not draw as they are, and 29 `title`s, are what the file held then. The guide the agents read (which component for
+  what, the rules of the design) is at the end of the repository's `AGENTS.md`, written by
+  `npx ioiti-ui guide ../AGENTS.md` from the version installed (`npm run guide` fails where it was not, after an
+  update).
+- **Since 0.4**, the Configuration page's bar of unsaved changes is
   its `SaveBar` (there only while something is unsaved, Save held back and why while a field holds what cannot be
   used), leaving the page asks through its `RouterLeaveGuard` (its own views, `within="/config"`, are no leaving;
   the sign-in a lapsed session goes to is let through, `isSignIn` of `features/auth/returnPath.ts`, as in the

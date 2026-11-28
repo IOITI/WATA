@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { Alert, AlertDescription, formatDay, formatNumber, formatPercent, Panel, QueryState, SignedValue } from 'ioiti-ui'
+import { Alert, AlertDescription, formatDay, formatNumber, formatPercent, Panel, QueryState, SignedValue, Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } from 'ioiti-ui'
 
 import { api } from '@/lib/api'
 import type { BacktestReconciliation } from '@/lib/types'
@@ -43,70 +43,68 @@ export function ReconciliationPanel({ runId }: { runId: string }) {
               </AlertDescription>
             </Alert>
             {found.pairs.length > 0 && (
-              <div className="overflow-x-auto">
-                <table className="w-full whitespace-nowrap text-sm" aria-label="Trades beside WATA's positions">
-                  <thead>
-                    <tr className="text-xs text-muted-foreground">
-                      <th scope="col" className="p-2 text-left font-medium">
-                        Trade
-                      </th>
-                      <th scope="col" className="p-2 text-right font-medium">
-                        Bought at, backtest / WATA
-                      </th>
-                      <th scope="col" className="p-2 text-right font-medium">
-                        Seconds after WATA
-                      </th>
-                      <th scope="col" className="p-2 text-right font-medium">
-                        Sold at, backtest / WATA
-                      </th>
-                      <th scope="col" className="p-2 text-right font-medium">
-                        Result, backtest
-                      </th>
-                      <th scope="col" className="p-2 text-right font-medium">
-                        Result, WATA
-                      </th>
-                      <th scope="col" className="p-2 text-left font-medium">
-                        Sold on
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody className="tabular-nums">
-                    {found.pairs.map((pair) => (
-                      <tr key={pair.signal_uuid} className="border-t border-border/50">
-                        <th scope="row" className="p-2 text-left font-medium whitespace-nowrap">
-                          #{pair.trade_id} · {formatDay(pair.day, false)} · {pair.direction}
-                          {pair.same_turbo === false && <span className="block text-xs font-normal text-warning">another turbo</span>}
-                        </th>
-                        <td className="p-2 text-right whitespace-nowrap">
-                          {price(pair.entry_price.backtest)} / {price(pair.entry_price.real)}
-                        </td>
-                        <td className="p-2 text-right">{pair.entry_seconds === null ? '-' : formatNumber(pair.entry_seconds, 1)}</td>
-                        <td className="p-2 text-right whitespace-nowrap">
-                          {price(pair.exit_price.backtest)} / {price(pair.exit_price.real)}
-                          {pair.exit_price_percent !== null && pair.exit_price_percent !== undefined && (
-                            <span className="block text-xs text-muted-foreground">{formatPercent(pair.exit_price_percent, true)}</span>
-                          )}
-                        </td>
-                        <td className="p-2 text-right">
-                          <SignedValue value={pair.result.backtest} kind="percent" />
-                        </td>
-                        <td className="p-2 text-right">
-                          <SignedValue value={pair.result.real} kind="percent" />
-                        </td>
-                        <td className="p-2 text-left text-xs">
-                          {pair.same_exit ? (
-                            pair.exit.backtest
-                          ) : (
-                            <span className="text-warning">
-                              {pair.exit.backtest || '-'} / WATA: {pair.exit.real || '-'}
-                            </span>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <Table density="dense" aria-label="Trades beside WATA's positions">
+                <TableHead>
+                  <TableRow>
+                    <TableHeaderCell scope="col">
+                      Trade
+                    </TableHeaderCell>
+                    <TableHeaderCell numeric scope="col">
+                      Bought at, backtest / WATA
+                    </TableHeaderCell>
+                    <TableHeaderCell numeric scope="col">
+                      Seconds after WATA
+                    </TableHeaderCell>
+                    <TableHeaderCell numeric scope="col">
+                      Sold at, backtest / WATA
+                    </TableHeaderCell>
+                    <TableHeaderCell numeric scope="col">
+                      Result, backtest
+                    </TableHeaderCell>
+                    <TableHeaderCell numeric scope="col">
+                      Result, WATA
+                    </TableHeaderCell>
+                    <TableHeaderCell scope="col">
+                      Sold on
+                    </TableHeaderCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {found.pairs.map((pair) => (
+                    <TableRow key={pair.signal_uuid} className="border-border/50">
+                      <TableHeaderCell scope="row" className="whitespace-nowrap">
+                        #{pair.trade_id} · {formatDay(pair.day, false)} · {pair.direction}
+                        {pair.same_turbo === false && <span className="block text-xs font-normal text-warning">another turbo</span>}
+                      </TableHeaderCell>
+                      <TableCell numeric className="whitespace-nowrap">
+                        {price(pair.entry_price.backtest)} / {price(pair.entry_price.real)}
+                      </TableCell>
+                      <TableCell numeric>{pair.entry_seconds === null ? '-' : formatNumber(pair.entry_seconds, 1)}</TableCell>
+                      <TableCell numeric className="whitespace-nowrap">
+                        {price(pair.exit_price.backtest)} / {price(pair.exit_price.real)}
+                        {pair.exit_price_percent !== null && pair.exit_price_percent !== undefined && (
+                          <span className="block text-xs text-muted-foreground">{formatPercent(pair.exit_price_percent, true)}</span>
+                        )}
+                      </TableCell>
+                      <TableCell numeric>
+                        <SignedValue value={pair.result.backtest} kind="percent" />
+                      </TableCell>
+                      <TableCell numeric>
+                        <SignedValue value={pair.result.real} kind="percent" />
+                      </TableCell>
+                      <TableCell className="text-left text-xs">
+                        {pair.same_exit ? (
+                          pair.exit.backtest
+                        ) : (
+                          <span className="text-warning">
+                            {pair.exit.backtest || '-'} / WATA: {pair.exit.real || '-'}
+                          </span>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
             )}
           </div>
         )}

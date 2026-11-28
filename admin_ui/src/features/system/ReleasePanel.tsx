@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Alert, AlertDescription, AlertTitle, Badge, Button, Checkbox, formatDateTime, Hint, Panel, QueryState } from 'ioiti-ui'
+import { Alert, AlertDescription, AlertTitle, Badge, Button, Checkbox, formatDateTime, Hint, Panel, QueryState, Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } from 'ioiti-ui'
 import { Rocket } from 'lucide-react'
 import { useEffect, useState } from 'react'
 
@@ -172,75 +172,73 @@ function WaitingTable({
   const newest = state.status.newest
   return (
     // Positioned: the last column's name, for screen readers alone, stays in the frame that scrolls it.
-    <div className="relative overflow-x-auto">
-      <table className="w-full min-w-[40rem] text-left text-xs">
-        <thead className="text-muted-foreground">
-          <tr>
-            <th className="py-2 pr-4 font-medium">Container</th>
-            <th className="py-2 pr-4 font-medium">Runs</th>
-            <th className="py-2 pr-4 font-medium">What {newest} changes for it</th>
-            <th className="py-2 pr-4 font-medium">Now</th>
-            <th className="py-2 font-medium">
-              <span className="sr-only">Apply</span>
-            </th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-border/40">
-          {waitingContainers(state).map((entry: ReleaseContainer) => {
-            const held = heldSaid(state, entry)
-            const group = entry.group
-              ? waitingContainers(state)
-                  .filter((other) => other.group === entry.group)
-                  .map((other) => other.container)
-              : [entry.container]
-            return (
-              <tr key={entry.container}>
-                <td className="py-2.5 pr-4 font-medium">
-                  {entry.container}
-                  {isCareful(entry) && (
-                    <Hint
-                      content={
-                        RECORDING_ROLES.has(entry.role)
-                          ? 'Records what cannot be fetched again: a deploy waits for the market to close, unless asked anyway'
-                          : 'Trades, or decides when to: a deploy waits for the market to close and no position open, unless asked anyway'
-                      }
-                    >
-                      <Badge variant="outline" className="ml-2">
-                        {RECORDING_ROLES.has(entry.role) ? 'Records' : 'Trading'}
-                      </Badge>
-                    </Hint>
-                  )}
-                </td>
-                <td className="py-2.5 pr-4 tabular-nums">{entry.version ?? '—'}</td>
-                <td className="py-2.5 pr-4 text-muted-foreground">
-                  <Hint content={changedFiles(entry) ?? undefined}>
-                    <span>{reasonsSaid(entry)}</span>
-                  </Hint>
-                </td>
-                <td className="py-2.5 pr-4">
-                  {held ? <span className="text-warning">{held}</span> : <span className="text-positive">May go now</span>}
-                </td>
-                <td className="py-1.5 text-right">
+    <Table density="compact" className="min-w-[40rem]">
+      <TableHead>
+        <TableRow>
+          <TableHeaderCell>Container</TableHeaderCell>
+          <TableHeaderCell>Runs</TableHeaderCell>
+          <TableHeaderCell>What {newest} changes for it</TableHeaderCell>
+          <TableHeaderCell>Now</TableHeaderCell>
+          <TableHeaderCell>
+            <span className="sr-only">Apply</span>
+          </TableHeaderCell>
+        </TableRow>
+      </TableHead>
+      <TableBody>
+        {waitingContainers(state).map((entry: ReleaseContainer) => {
+          const held = heldSaid(state, entry)
+          const group = entry.group
+            ? waitingContainers(state)
+                .filter((other) => other.group === entry.group)
+                .map((other) => other.container)
+            : [entry.container]
+          return (
+            <TableRow key={entry.container}>
+              <TableCell className="font-medium">
+                {entry.container}
+                {isCareful(entry) && (
                   <Hint
                     content={
-                      unavailable ??
-                      (group.length > 1
-                        ? `With ${group.filter((name) => name !== entry.container).join(', ')}: they change because of the same files, and move together`
-                        : undefined)
+                      RECORDING_ROLES.has(entry.role)
+                        ? 'Records what cannot be fetched again: a deploy waits for the market to close, unless asked anyway'
+                        : 'Trades, or decides when to: a deploy waits for the market to close and no position open, unless asked anyway'
                     }
-                    wrap
                   >
-                    <Button variant="outline" size="sm" disabled={unavailable !== null} onClick={() => onApply(group)}>
-                      Apply
-                    </Button>
+                    <Badge variant="outline" className="ml-2">
+                      {RECORDING_ROLES.has(entry.role) ? 'Records' : 'Trading'}
+                    </Badge>
                   </Hint>
-                </td>
-              </tr>
-            )
-          })}
-        </tbody>
-      </table>
-    </div>
+                )}
+              </TableCell>
+              <TableCell className="tabular-nums">{entry.version ?? '—'}</TableCell>
+              <TableCell className="text-muted-foreground">
+                <Hint content={changedFiles(entry) ?? undefined}>
+                  <span>{reasonsSaid(entry)}</span>
+                </Hint>
+              </TableCell>
+              <TableCell>
+                {held ? <span className="text-warning">{held}</span> : <span className="text-positive">May go now</span>}
+              </TableCell>
+              <TableCell className="py-1.5 text-right">
+                <Hint
+                  content={
+                    unavailable ??
+                    (group.length > 1
+                      ? `With ${group.filter((name) => name !== entry.container).join(', ')}: they change because of the same files, and move together`
+                      : undefined)
+                  }
+                  wrap
+                >
+                  <Button variant="outline" size="sm" disabled={unavailable !== null} onClick={() => onApply(group)}>
+                    Apply
+                  </Button>
+                </Hint>
+              </TableCell>
+            </TableRow>
+          )
+        })}
+      </TableBody>
+    </Table>
   )
 }
 

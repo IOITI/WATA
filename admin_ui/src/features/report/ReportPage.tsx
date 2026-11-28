@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { ButtonLink, formatDay, formatMoney, formatNumber, formatPercent, KpiTile, PageHeader, Panel, QueryState, SignedValue, StatCard } from 'ioiti-ui'
+import { ButtonLink, formatDay, formatMoney, formatNumber, formatPercent, KpiGrid, KpiTile, PageHeader, Panel, QueryState, SignedValue, StatCard, Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } from 'ioiti-ui'
 import { useSearchParams } from 'react-router'
 
 import { BalanceChart } from '@/components/charts/PerformanceCharts'
@@ -26,50 +26,48 @@ function PeriodTable({ rows, periodHeader }: { rows: PeriodRow[]; periodHeader: 
     return <p className="py-4 text-center text-sm text-muted-foreground">No closed trade yet.</p>
   }
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full min-w-[44rem] text-left text-xs">
-        <thead className="text-muted-foreground">
-          <tr>
-            <th className="py-2 pr-4 font-medium">{periodHeader}</th>
-            <th className="py-2 pr-4 text-right font-medium">Trades</th>
-            <th className="py-2 pr-4 text-right font-medium">Won</th>
-            <th className="py-2 pr-4 text-right font-medium">Net profit</th>
-            <th className="py-2 pr-4 text-right font-medium">Compounded</th>
-            <th className="py-2 pr-4 text-right font-medium">Profit factor</th>
-            <th className="py-2 pr-4 text-right font-medium">Max drawdown</th>
-            <th className="py-2 pr-4 text-right font-medium">Average win</th>
-            <th className="py-2 text-right font-medium">Average loss</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-border/40">
-          {rows.map(({ label, summary }) => (
-            <tr key={label}>
-              <td className="py-2.5 pr-4 font-medium">{label}</td>
-              <td className="py-2.5 pr-4 text-right tabular-nums">{summary.trade_count}</td>
-              <td className="py-2.5 pr-4 text-right tabular-nums">
-                {summary.trade_count > 0 ? formatPercent(summary.win_rate, false, 0) : '—'}
-              </td>
-              <td className="py-2.5 pr-4 text-right">
-                <SignedValue value={summary.net_profit} kind="money" />
-              </td>
-              <td className="py-2.5 pr-4 text-right">
-                <SignedValue value={summary.compounded_percent} kind="percent" />
-              </td>
-              <td className="py-2.5 pr-4 text-right tabular-nums">{profitFactor(summary)}</td>
-              <td className="py-2.5 pr-4 text-right">
-                <SignedValue value={summary.max_drawdown} kind="percent" />
-              </td>
-              <td className="py-2.5 pr-4 text-right">
-                <SignedValue value={summary.avg_win} kind="percent" />
-              </td>
-              <td className="py-2.5 text-right">
-                <SignedValue value={summary.avg_loss} kind="percent" />
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <Table density="compact" className="min-w-[44rem]">
+      <TableHead>
+        <TableRow>
+          <TableHeaderCell>{periodHeader}</TableHeaderCell>
+          <TableHeaderCell numeric>Trades</TableHeaderCell>
+          <TableHeaderCell numeric>Won</TableHeaderCell>
+          <TableHeaderCell numeric>Net profit</TableHeaderCell>
+          <TableHeaderCell numeric>Compounded</TableHeaderCell>
+          <TableHeaderCell numeric>Profit factor</TableHeaderCell>
+          <TableHeaderCell numeric>Max drawdown</TableHeaderCell>
+          <TableHeaderCell numeric>Average win</TableHeaderCell>
+          <TableHeaderCell numeric>Average loss</TableHeaderCell>
+        </TableRow>
+      </TableHead>
+      <TableBody>
+        {rows.map(({ label, summary }) => (
+          <TableRow key={label}>
+            <TableCell className="font-medium">{label}</TableCell>
+            <TableCell numeric>{summary.trade_count}</TableCell>
+            <TableCell numeric>
+              {summary.trade_count > 0 ? formatPercent(summary.win_rate, false, 0) : '—'}
+            </TableCell>
+            <TableCell className="text-right">
+              <SignedValue value={summary.net_profit} kind="money" />
+            </TableCell>
+            <TableCell className="text-right">
+              <SignedValue value={summary.compounded_percent} kind="percent" />
+            </TableCell>
+            <TableCell numeric>{profitFactor(summary)}</TableCell>
+            <TableCell className="text-right">
+              <SignedValue value={summary.max_drawdown} kind="percent" />
+            </TableCell>
+            <TableCell className="text-right">
+              <SignedValue value={summary.avg_win} kind="percent" />
+            </TableCell>
+            <TableCell className="text-right">
+              <SignedValue value={summary.avg_loss} kind="percent" />
+            </TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
   )
 }
 
@@ -105,24 +103,24 @@ function Milestones({ report }: { report: Report }) {
     )
 
   return (
-    <table className="w-full text-left text-xs">
-      <thead className="text-muted-foreground">
-        <tr>
-          <th className="py-2 pr-4 font-medium">Account value</th>
-          <th className="py-2 pr-4 font-medium">At the average weekly return</th>
-          <th className="py-2 font-medium">At the average monthly return</th>
-        </tr>
-      </thead>
-      <tbody className="divide-y divide-border/40">
+    <Table density="compact">
+      <TableHead>
+        <TableRow>
+          <TableHeaderCell>Account value</TableHeaderCell>
+          <TableHeaderCell>At the average weekly return</TableHeaderCell>
+          <TableHeaderCell>At the average monthly return</TableHeaderCell>
+        </TableRow>
+      </TableHead>
+      <TableBody>
         {milestones.map((milestone) => (
-          <tr key={milestone}>
-            <td className="py-2.5 pr-4 font-medium tabular-nums">{formatMoney(milestone)}</td>
-            <td className="py-2.5 pr-4">{cell(weeklyByMilestone.get(milestone))}</td>
-            <td className="py-2.5">{cell(monthlyByMilestone.get(milestone))}</td>
-          </tr>
+          <TableRow key={milestone}>
+            <TableCell className="font-medium tabular-nums">{formatMoney(milestone)}</TableCell>
+            <TableCell>{cell(weeklyByMilestone.get(milestone))}</TableCell>
+            <TableCell>{cell(monthlyByMilestone.get(milestone))}</TableCell>
+          </TableRow>
         ))}
-      </tbody>
-    </table>
+      </TableBody>
+    </Table>
   )
 }
 
@@ -146,7 +144,7 @@ function ReportContent({ report, past = false }: { report: Report; past?: boolea
 
   return (
     <>
-      <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
+      <KpiGrid>
         {report.current_balance !== null && report.balance_history.length >= 2 ? (
           // Its value at each daily report, to scrub, and how far it moved since the first of them.
           <StatCard
@@ -185,7 +183,7 @@ function ReportContent({ report, past = false }: { report: Report; past?: boolea
           value={<SignedValue value={report.averages.monthly_percent} kind="percent" className="font-semibold" />}
           hint={`Average year: ${formatPercent(report.averages.yearly_percent, true)}`}
         />
-      </div>
+      </KpiGrid>
 
       <Panel
         title="Account value"

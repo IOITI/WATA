@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Alert, AlertDescription, Button, DateRangePicker, formatNumber, Panel, toIsoDay } from 'ioiti-ui'
+import { Alert, AlertDescription, Button, DateRangePicker, formatNumber, Panel, Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow, toIsoDay } from 'ioiti-ui'
 import type { DateRange } from 'ioiti-ui'
 import { Ruler } from 'lucide-react'
 import { useState } from 'react'
@@ -42,56 +42,54 @@ export function TurboModelPanel() {
       <div className="flex flex-col gap-4 text-sm">
         <p>{measureSentence(model.measure)}</p>
         {model.measure && (
-          <div className="overflow-x-auto">
-            <table className="w-full whitespace-nowrap text-sm" aria-label="The measure of each direction">
-              <thead>
-                <tr className="text-xs text-muted-foreground">
-                  <th scope="col" className="p-2 text-left font-medium">
-                    Direction
-                  </th>
-                  <th scope="col" className="p-2 text-right font-medium">
-                    € a point
-                  </th>
-                  <th scope="col" className="p-2 text-right font-medium">
-                    Level beyond the knock-out
-                  </th>
-                  <th scope="col" className="p-2 text-right font-medium">
-                    Levels every
-                  </th>
-                  <th scope="col" className="p-2 text-right font-medium">
-                    Turbos measured
-                  </th>
-                  <th scope="col" className="p-2 text-right font-medium">
-                    R²
-                  </th>
-                  <th scope="col" className="p-2 text-right font-medium">
-                    Median error
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="tabular-nums">
-                {(['long', 'short'] as const).map((direction) => {
-                  const measured = model.measure!.directions[direction]
-                  return (
-                    <tr key={direction} className="border-t border-border/50">
-                      <th scope="row" className="p-2 text-left font-medium capitalize">
-                        {direction}
-                      </th>
-                      <td className="p-2 text-right">{formatNumber(measured.factor, 5)}</td>
-                      <td className="p-2 text-right">{formatNumber(measured.offset, 1)} points</td>
-                      <td className="p-2 text-right">{formatNumber(measured.spacing, 0)} points</td>
-                      <td className="p-2 text-right">{formatNumber(measured.turbos)}</td>
-                      <td className="p-2 text-right">{measured.r2 === null ? '-' : formatNumber(measured.r2, 3)}</td>
-                      <td className="p-2 text-right whitespace-nowrap">
-                        {measured.error_eur === null ? '-' : `${formatNumber(measured.error_eur, 3)} €`}
-                        {measured.error_percent === null ? '' : ` (${formatNumber(measured.error_percent, 1)} %)`}
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
+          <Table density="dense" aria-label="The measure of each direction">
+            <TableHead>
+              <TableRow>
+                <TableHeaderCell scope="col">
+                  Direction
+                </TableHeaderCell>
+                <TableHeaderCell numeric scope="col">
+                  € a point
+                </TableHeaderCell>
+                <TableHeaderCell numeric scope="col">
+                  Level beyond the knock-out
+                </TableHeaderCell>
+                <TableHeaderCell numeric scope="col">
+                  Levels every
+                </TableHeaderCell>
+                <TableHeaderCell numeric scope="col">
+                  Turbos measured
+                </TableHeaderCell>
+                <TableHeaderCell numeric scope="col">
+                  R²
+                </TableHeaderCell>
+                <TableHeaderCell numeric scope="col">
+                  Median error
+                </TableHeaderCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {(['long', 'short'] as const).map((direction) => {
+                const measured = model.measure!.directions[direction]
+                return (
+                  <TableRow key={direction} className="border-border/50">
+                    <TableHeaderCell scope="row" className="capitalize">
+                      {direction}
+                    </TableHeaderCell>
+                    <TableCell numeric>{formatNumber(measured.factor, 5)}</TableCell>
+                    <TableCell numeric>{formatNumber(measured.offset, 1)} points</TableCell>
+                    <TableCell numeric>{formatNumber(measured.spacing, 0)} points</TableCell>
+                    <TableCell numeric>{formatNumber(measured.turbos)}</TableCell>
+                    <TableCell numeric>{measured.r2 === null ? '-' : formatNumber(measured.r2, 3)}</TableCell>
+                    <TableCell numeric className="whitespace-nowrap">
+                      {measured.error_eur === null ? '-' : `${formatNumber(measured.error_eur, 3)} €`}
+                      {measured.error_percent === null ? '' : ` (${formatNumber(measured.error_percent, 1)} %)`}
+                    </TableCell>
+                  </TableRow>
+                )
+              })}
+            </TableBody>
+          </Table>
         )}
         {state && (
           <Alert tone={model.state === 'failed' ? 'danger' : 'neutral'}>

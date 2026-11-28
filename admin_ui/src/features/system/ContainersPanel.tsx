@@ -1,4 +1,4 @@
-import { Alert, AlertDescription, Badge, formatNumber, Hint, Panel, QueryState } from 'ioiti-ui'
+import { Alert, AlertDescription, Badge, formatNumber, Hint, Panel, QueryState, Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } from 'ioiti-ui'
 import { useState } from 'react'
 
 import type { ReleaseContainer, ServicesState } from '@/lib/types'
@@ -25,78 +25,76 @@ function ContainersTable({
 }) {
   return (
     // Positioned: the last column's name, for screen readers alone, stays in the frame that scrolls it.
-    <div className="relative overflow-x-auto">
-      <table className="w-full min-w-[40rem] text-left text-xs">
-        <thead className="text-muted-foreground">
-          <tr>
-            <th className="py-2 pr-4 font-medium">Service</th>
-            <th className="py-2 pr-4 font-medium">Container</th>
-            <th className="py-2 pr-4 font-medium">Release</th>
-            <th className="py-2 pr-4 text-right font-medium">Restarts</th>
-            <th className="py-2 pr-4 font-medium">Configuration</th>
-            <th className="py-2 font-medium">
-              <span className="sr-only">Restart</span>
-            </th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-border/40">
-          {state.services.map((service) => {
-            const pending = pendingSaid(service)
-            const release = service.container ? releases[service.container] : undefined
-            const waits = release?.kind === 'change' || release?.kind === 'optional'
-            return (
-              <tr key={service.id}>
-                <td className="py-2.5 pr-4 font-medium">
-                  {service.name}
-                  {service.trading_path && (
-                    <Hint content="Trades, or decides when to: not restarted with a position open or the market open, unless asked anyway">
-                      <Badge variant="outline" className="ml-2">
-                        Trading
-                      </Badge>
-                    </Hint>
-                  )}
-                </td>
-                <td className="py-2.5 pr-4 text-muted-foreground">
-                  {containerSaid(service, timeZone)}
-                  {service.oom_killed && <span className="ml-1 text-negative">· stopped for lack of memory</span>}
-                  {service.last_restart && !service.last_restart.ok && (
-                    <span className="ml-1 text-negative">· its last restart failed: {service.last_restart.detail}</span>
-                  )}
-                </td>
-                <td className="py-2.5 pr-4 tabular-nums">
-                  {waits && release ? (
-                    <Hint content={`What ${newest} changes for it: ${reasonsSaid(release)}. The Release panel above applies it.`}>
-                      <span className="text-warning">{versionSaid(release, newest)}</span>
-                    </Hint>
-                  ) : (
-                    <span className="text-muted-foreground">{versionSaid(release, newest)}</span>
-                  )}
-                </td>
-                <td className="py-2.5 pr-4 text-right tabular-nums">
-                  {service.restart_count === null ? '—' : formatNumber(service.restart_count)}
-                </td>
-                <td className="py-2.5 pr-4">
-                  {pending ? (
-                    <Hint content={service.pending.paths.length ? service.pending.paths.join(', ') : undefined}>
-                      <span className="text-warning">{pending}</span>
-                    </Hint>
-                  ) : (
-                    <span className="text-muted-foreground">Up to date</span>
-                  )}
-                </td>
-                <td className="py-1.5 text-right">
-                  <RestartButton
-                    label="Restart"
-                    unavailable={restartUnavailable(state, service)}
-                    onClick={() => onRestart([service.id])}
-                  />
-                </td>
-              </tr>
-            )
-          })}
-        </tbody>
-      </table>
-    </div>
+    <Table density="compact" className="min-w-[40rem]">
+      <TableHead>
+        <TableRow>
+          <TableHeaderCell>Service</TableHeaderCell>
+          <TableHeaderCell>Container</TableHeaderCell>
+          <TableHeaderCell>Release</TableHeaderCell>
+          <TableHeaderCell numeric>Restarts</TableHeaderCell>
+          <TableHeaderCell>Configuration</TableHeaderCell>
+          <TableHeaderCell>
+            <span className="sr-only">Restart</span>
+          </TableHeaderCell>
+        </TableRow>
+      </TableHead>
+      <TableBody>
+        {state.services.map((service) => {
+          const pending = pendingSaid(service)
+          const release = service.container ? releases[service.container] : undefined
+          const waits = release?.kind === 'change' || release?.kind === 'optional'
+          return (
+            <TableRow key={service.id}>
+              <TableCell className="font-medium">
+                {service.name}
+                {service.trading_path && (
+                  <Hint content="Trades, or decides when to: not restarted with a position open or the market open, unless asked anyway">
+                    <Badge variant="outline" className="ml-2">
+                      Trading
+                    </Badge>
+                  </Hint>
+                )}
+              </TableCell>
+              <TableCell className="text-muted-foreground">
+                {containerSaid(service, timeZone)}
+                {service.oom_killed && <span className="ml-1 text-negative">· stopped for lack of memory</span>}
+                {service.last_restart && !service.last_restart.ok && (
+                  <span className="ml-1 text-negative">· its last restart failed: {service.last_restart.detail}</span>
+                )}
+              </TableCell>
+              <TableCell className="tabular-nums">
+                {waits && release ? (
+                  <Hint content={`What ${newest} changes for it: ${reasonsSaid(release)}. The Release panel above applies it.`}>
+                    <span className="text-warning">{versionSaid(release, newest)}</span>
+                  </Hint>
+                ) : (
+                  <span className="text-muted-foreground">{versionSaid(release, newest)}</span>
+                )}
+              </TableCell>
+              <TableCell numeric>
+                {service.restart_count === null ? '—' : formatNumber(service.restart_count)}
+              </TableCell>
+              <TableCell>
+                {pending ? (
+                  <Hint content={service.pending.paths.length ? service.pending.paths.join(', ') : undefined}>
+                    <span className="text-warning">{pending}</span>
+                  </Hint>
+                ) : (
+                  <span className="text-muted-foreground">Up to date</span>
+                )}
+              </TableCell>
+              <TableCell className="py-1.5 text-right">
+                <RestartButton
+                  label="Restart"
+                  unavailable={restartUnavailable(state, service)}
+                  onClick={() => onRestart([service.id])}
+                />
+              </TableCell>
+            </TableRow>
+          )
+        })}
+      </TableBody>
+    </Table>
   )
 }
 

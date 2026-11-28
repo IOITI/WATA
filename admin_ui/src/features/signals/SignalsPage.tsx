@@ -13,6 +13,12 @@ import {
   Panel,
   QueryState,
   SelectMenu,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeaderCell,
+  TableRow,
   useToast,
 } from 'ioiti-ui'
 import { Send } from 'lucide-react'
@@ -208,34 +214,32 @@ export function SignalsPage() {
             <p className="py-6 text-center text-sm text-muted-foreground">No signal since the web server started.</p>
           )}
           {signals && signals.length > 0 && (
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[36rem] text-left text-xs">
-                <thead className="text-muted-foreground">
-                  <tr>
-                    <th className="py-2 pr-4 font-medium">Signal</th>
-                    <th className="py-2 pr-4 font-medium">Indice</th>
-                    <th className="py-2 pr-4 font-medium">Signal time</th>
-                    <th className="py-2 pr-4 font-medium">Received</th>
-                    <th className="py-2 pr-4 text-right font-medium">Confidence</th>
-                    <th className="py-2 font-medium">Reference</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border/40">
-                  {signals.map((signal) => (
-                    <tr key={signal.signal_uuid}>
-                      <td className="py-2.5 pr-4">
-                        <ActionBadge action={signal.action} />
-                      </td>
-                      <td className="py-2.5 pr-4 font-medium">{signal.indice}</td>
-                      <td className="py-2.5 pr-4">{formatDateTime(signal.signal_timestamp, timezone)}</td>
-                      <td className="py-2.5 pr-4">{formatDateTime(signal.received_timestamp, timezone)}</td>
-                      <td className="py-2.5 pr-4 text-right tabular-nums">{signal.confidence ?? '—'}</td>
-                      <td className="py-2.5 font-mono text-muted-foreground">{signal.signal_uuid.slice(0, 8)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <Table density="compact" className="min-w-[36rem]">
+              <TableHead>
+                <TableRow>
+                  <TableHeaderCell>Signal</TableHeaderCell>
+                  <TableHeaderCell>Indice</TableHeaderCell>
+                  <TableHeaderCell>Signal time</TableHeaderCell>
+                  <TableHeaderCell>Received</TableHeaderCell>
+                  <TableHeaderCell numeric>Confidence</TableHeaderCell>
+                  <TableHeaderCell>Reference</TableHeaderCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {signals.map((signal) => (
+                  <TableRow key={signal.signal_uuid}>
+                    <TableCell>
+                      <ActionBadge action={signal.action} />
+                    </TableCell>
+                    <TableCell className="font-medium">{signal.indice}</TableCell>
+                    <TableCell>{formatDateTime(signal.signal_timestamp, timezone)}</TableCell>
+                    <TableCell>{formatDateTime(signal.received_timestamp, timezone)}</TableCell>
+                    <TableCell numeric>{signal.confidence ?? '—'}</TableCell>
+                    <TableCell className="font-mono text-muted-foreground">{signal.signal_uuid.slice(0, 8)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
           )}
         </QueryState>
       </Panel>

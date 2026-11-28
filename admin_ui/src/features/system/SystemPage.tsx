@@ -10,6 +10,12 @@ import {
   Panel,
   QueryState,
   StatusBadge,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeaderCell,
+  TableRow,
   useToast,
 } from 'ioiti-ui'
 import { useState } from 'react'
@@ -34,45 +40,43 @@ const SERVICE_PAGES: Record<string, string> = { ta_engine: '/ta/monitor', disk: 
 
 function ServicesTable({ health }: { health: Health }) {
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full min-w-[32rem] text-left text-xs">
-        <thead className="text-muted-foreground">
-          <tr>
-            <th className="py-2 pr-4 font-medium">Service</th>
-            <th className="py-2 pr-4 font-medium">State</th>
-            <th className="py-2 font-medium">What was observed</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-border/40">
-          {health.services.map((service) => (
-            <tr key={service.id}>
-              <td className="py-2.5 pr-4 font-medium">
-                {SERVICE_PAGES[service.id] ? (
-                  <Link className="underline-offset-2 hover:underline" to={SERVICE_PAGES[service.id]}>
-                    {service.name}
-                  </Link>
-                ) : (
-                  service.name
+    <Table density="compact" className="min-w-[32rem]">
+      <TableHead>
+        <TableRow>
+          <TableHeaderCell>Service</TableHeaderCell>
+          <TableHeaderCell>State</TableHeaderCell>
+          <TableHeaderCell>What was observed</TableHeaderCell>
+        </TableRow>
+      </TableHead>
+      <TableBody>
+        {health.services.map((service) => (
+          <TableRow key={service.id}>
+            <TableCell className="font-medium">
+              {SERVICE_PAGES[service.id] ? (
+                <Link className="underline-offset-2 hover:underline" to={SERVICE_PAGES[service.id]}>
+                  {service.name}
+                </Link>
+              ) : (
+                service.name
+              )}
+            </TableCell>
+            <TableCell>
+              <StatusBadge status={service.status} />
+            </TableCell>
+            <TableCell className="text-muted-foreground">
+              <span className="flex items-start justify-between gap-2">
+                <span>{service.detail}</span>
+                {service.status !== 'ok' && (
+                  // The moment of the check, in UTC: the services' log lines are written so.
+                  <AskAgentLink compact label={`Ask the AI agent what went wrong with ${service.name}`}
+                    subject={{ kind: 'incident', id: service.id, at: health.checked_at.slice(0, 16).replace('T', ' ') }} />
                 )}
-              </td>
-              <td className="py-2.5 pr-4">
-                <StatusBadge status={service.status} />
-              </td>
-              <td className="py-2.5 text-muted-foreground">
-                <span className="flex items-start justify-between gap-2">
-                  <span>{service.detail}</span>
-                  {service.status !== 'ok' && (
-                    // The moment of the check, in UTC: the services' log lines are written so.
-                    <AskAgentLink compact label={`Ask the AI agent what went wrong with ${service.name}`}
-                      subject={{ kind: 'incident', id: service.id, at: health.checked_at.slice(0, 16).replace('T', ' ') }} />
-                  )}
-                </span>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+              </span>
+            </TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
   )
 }
 
@@ -81,26 +85,26 @@ function Queues({ health }: { health: Health }) {
     return <p className="py-4 text-center text-sm text-muted-foreground">RabbitMQ did not answer.</p>
   }
   return (
-    <table className="w-full text-left text-xs">
-      <thead className="text-muted-foreground">
-        <tr>
-          <th className="py-2 pr-4 font-medium">Queue</th>
-          <th className="py-2 pr-4 text-right font-medium">Waiting messages</th>
-          <th className="py-2 text-right font-medium">Consumers</th>
-        </tr>
-      </thead>
-      <tbody className="divide-y divide-border/40">
+    <Table density="compact">
+      <TableHead>
+        <TableRow>
+          <TableHeaderCell>Queue</TableHeaderCell>
+          <TableHeaderCell numeric>Waiting messages</TableHeaderCell>
+          <TableHeaderCell numeric>Consumers</TableHeaderCell>
+        </TableRow>
+      </TableHead>
+      <TableBody>
         {health.queues.map((queue) => (
-          <tr key={queue.name}>
-            <td className="py-2.5 pr-4 font-mono">{queue.name}</td>
-            <td className="py-2.5 pr-4 text-right tabular-nums">
+          <TableRow key={queue.name}>
+            <TableCell className="font-mono">{queue.name}</TableCell>
+            <TableCell numeric>
               {queue.declared ? formatNumber(queue.messages) : 'not declared'}
-            </td>
-            <td className="py-2.5 text-right tabular-nums">{formatNumber(queue.consumers)}</td>
-          </tr>
+            </TableCell>
+            <TableCell numeric>{formatNumber(queue.consumers)}</TableCell>
+          </TableRow>
         ))}
-      </tbody>
-    </table>
+      </TableBody>
+    </Table>
   )
 }
 

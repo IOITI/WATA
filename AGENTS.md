@@ -50,7 +50,9 @@ PYTHONPATH=./:src/ python3 -m src.price_history.dukascopy --from 2026-09-14 --to
 ./package.sh          # creates wata_app_v<VERSION>.zip
 
 # Admin interface (in admin_ui/)
-npm run lint && npm run typecheck && npm test && npm run build
+npm run lint && npm run guide && npm run doctor && npm run typecheck && npm test && npm run build
+npx ioiti-ui doctor           # what a page wrote by hand that ioiti-ui has; --fix writes a table or a grid of tiles as the component
+npx ioiti-ui guide ../AGENTS.md   # ioiti-ui's guide at the end of this file, written again after an update of ioiti-ui
 npm run dev:api       # the real admin app over fake data on 127.0.0.1:8082 (password printed at start)
 FAKE_AI=1 npm run dev:api   # the same with the AI agent on, its answers made up (dev/fake_ai.py): nothing reaches Anthropic
 npm run dev           # Vite dev server, proxies /api to it
@@ -313,7 +315,7 @@ PYTHONPATH=./:src/ python3 src/release/manifest.py --root . --no-platform
 - **Admin live events** (`/api/events`, SSE): uvicorn does not tell the app that a browser left and writing to it does not fail, so the stream asks `request.is_disconnected()` itself. Keep `SecurityHeadersMiddleware` a plain ASGI middleware (`@app.middleware("http")` hides the disconnect from a streamed response) and keep `timeout_graceful_shutdown` on `uvicorn.run`, or an open page keeps the container from stopping. `tests/test_admin_api.py` checks both on a real socket (`RunningAdmin`), which the in-memory `TestClient` cannot show. The admin's answers of 4 kB or more go out gzipped (`CompressedAnswers` in `src/admin/app.py`), never a stream: Starlette's compressing middleware holds an answer's headers back until its first bytes, so a request that accepts `text/event-stream`, and `/mcp`, go around it (tested).
 - **The top bar's bell keeps the tab's events** (`features/live/eventLog.ts`, `EventsBell.tsx`): what each toast said, 50 at most, newest first, read or not, in `sessionStorage` (a reload keeps them, another tab has its own). Each leads where it happened (`eventLink` in `liveEvents.ts`, with its tests): an event added to `describeEvent` gets its page there too. The browser notifications' switch is in the bell's footer.
 - **⌘K (Ctrl+K) only goes somewhere** (`components/CommandPalette.tsx`, entries from `commandItems.ts`): the menu's pages, runs, rules, scripts, assets, a position or an order by its number, read through the pages' own queries once it is open. Never an entry that trades or changes anything: actions stay on their pages, behind their confirmations. With nothing typed it lists each kind as a list of its own, searched alone (`listItems`, ioiti-ui 0.19's `items`: always an array, `[]` while read, or the palette loses the list it shows), then the pages; typed, everything as before (`paletteItems`). The entries chosen last come first (`remember`, kept as `wata.theme.spotlight.go-to`, and the attach picker's as `.attach`, `src/lib/remembered.ts`), forgotten when the operator signs out (`forgetRemembered` in `AuthProvider.logout`; a lapsed session keeps them). Entries are followed through the router by ioiti-ui's `RouterRoot`: no `onNavigate` nor `linkComponent`.
-- **A hint is a `Hint`** (ioiti-ui's, on EasyUI's `directional-tooltip`): what says why a control is disabled or what a state means shows on hover, keyboard focus and a tap, and describes its control for screen readers; a disabled control goes in the focusable wrapper `wrap` gives it. A `title` does none of that on a phone or for the keyboard.
+- **A hint is a `Hint`**, never a `title` (ioiti-ui's guide, at the end of this file; its `components/Hint.md` says the rest, `wrap` for a disabled control too). The `title`s written before are counted in `admin_ui/ioiti-doctor.json`, which only shrinks: a new one fails `npm run doctor`.
 - **A close or a signal sent by hand is followed to its outcome** (`features/live/follow.ts`, pure and tested, and `FollowProvider.tsx`, ioiti-ui's `RequestStatus`, EasyUI's `payment-status`): one card at a time, owned by the shell and not by the row it was asked from, which goes when its position closes. It reads the position's orders and requests to Saxo, or the journal, which the live events refresh; it acts on nothing. A close with no sell seen 75 s after it was asked is said to be dropped (`CLOSE_GIVE_UP_MS`), because the position monitor drops a close request older than `CLOSE_REQUEST_MAX_AGE_SECONDS` (60): a change to one is made in the other.
 - **A run is among the favourites by its request** (`favourite` in `request.json`, written with its name and tags by `BacktestService.update` under its lock; `set_favourites` for several, `POST /api/backtests/favourites`; since v0.78.0): listed as `favourite`, kept by a remake (its request copied), never taken by a run made from it (`_derived` leaves it out with `paper`). The pages: the row's star and the basket's action (`RunsTable.tsx`, `favouriteAction` in `model.ts`), the run page's button (not a paper run's), the list's filter (`favourite` of `RunFilter`, `?favourite=yes`); `useSetFavourites` (`features/backtests/useFavourites.ts`) shows the change at once in every list and page of the runs, then reads them again.
 - **Backtests are removed with an Undo, not a question** (`features/backtests/PendingRemovalsProvider.tsx`, EasyUI's `undo-toast`): hidden at once (`useHiddenRuns`, which every list of runs leaves out), the request sent once the 8 s run out or the toast is closed. Nothing is sent before: a tab closed meanwhile deletes nothing. The former backtester's runs keep their confirmation.
@@ -348,7 +350,7 @@ PYTHONPATH=./:src/ python3 src/release/manifest.py --root . --no-platform
 - **Lightweight Charts is confined to `admin_ui/src/features/prices/PriceChart.tsx`.** It only knows UTC: `chartData.ts` shifts times to the trading timezone. Its licence requires the notice and link on every page that shows a chart: `ChartAttribution` goes wherever `PriceChart` goes (an asset's page, an opened row of the Assets View, a day of a backtest, a rule's day beside TradingView, the editor's test). One fault of 5.2.1 is worked around there, for the index line and for the lines drawn over the prices alike (see `admin_ui/README.md`). Tests use `admin_ui/src/test/fakeCharts.ts`.
 - **The backtest pages** (`admin_ui/src/features/backtests/`) keep what can be wrong without a browser in plain functions with tests: `model.ts` (labels, every sentence that says how far a run can be trusted, the curves, runs side by side), `form.ts` (the form as data: its checks, its quick ranges of days, the period fitted to its days with turbos and bars recorded, and the request it becomes), `dayChart.ts` (a day's signals and trades as marks, and the stretch of it a trade is brought into view with), `tradeChart.ts` (a trade's levels over its turbo, the trailing stop as it moved), `sweep.ts` (a sweep's grid, tints and verdict), `configurations.ts` (the configurations' filters, verdicts and sentences: the page's view `ConfigurationsTable.tsx`, a configuration's page `ConfigurationPage.tsx` with `NightlyDialog.tsx`) and `verdict.ts` (whether a run can be believed, check by check, at the top of its page). `/backtests` opens on the configurations (each row's verdict is its latest run's, read with the runs that judge it: `configurationJudged`), every run at `?view=runs`; the filters are carried from one view to the other. **The bar lives in three places kept in step**: `verdict.ts`, its Python twin `src/admin/run_verdict.py` (the MCP tools, the AI agent, a conclusion's checks) and the MCP's instructions (`src/admin/mcp_server/instructions.py`, "Do not believe": 30 trades and 20 days, 10 % of the trades at most priced off the recorded quotes (`restsOn.ts`), 95 % of random runs beaten, the edge's t of 2.6, a run's Sharpe deflated by its family's trials (`family`), a result that holds without the days its idea came from (`motivated`), a stress step, the overfitting figures of `robustness.ts`): a change to one is made in the others, so that the pages and Claude judge a run alike. `verdictParity.json` (beside `verdict.ts`) holds the first two to the same checks and states, in order: read by `verdict.test.ts` and `tests/test_run_verdict.py`; a check added gets its cases there. The list of runs gives each run its verdict from the same checks (`listedChecks`, `judgedRuns`, the Verdict column and filter; the table is `RunsTable.tsx`, a script's Backtests tab's too), read from the headline the server lists it with, which carries what the checks read (`_headline`, a sweep's `compact_grid` in `src/admin/backtests.py`): `verdict.test.ts` holds `listedChecks` to what `runChecks` says on the same runs, so a figure a check comes to read goes into the headline too. Tags are filtered by (`?tag=`) and edited as chips (`TagsField.tsx`, ioiti-ui's `MultiSelect`). The script fields of the form are the signal rules' (`features/ta/signals/RuleFields.tsx`, `useScriptInputs.ts`), the inputs in the groups the script declares (`inputSections` in `ruleModel.ts`). Runs compared on one chart take the `--chart-compare-*` colours of ioiti-ui's `theme.css`, four at most: every pair was validated for colour-blind readers in both themes, and a fifth has no colour that passes.
 - **The admin interface has two themes** switched by `dark` on `<html>`: ioiti-ui's pre-paint script (`ioiti-theme.js`, written and put at the top of `<head>` by `ioiti()` in `vite.config.ts`: a file because the CSP allows no inline script) sets it before the first paint, and its `ThemeProvider` (in `IoitiProvider`, `App.tsx`) keeps it while the application runs, the choice kept under `wata.theme` as before. A class that names a colour needs both values (`light dark:dark`) or a token that has both; status colours as text must stay at 4.5:1 on every surface of their theme (ioiti-ui's `theme.css`). Canvas charts read their colours once: `PriceChart` is keyed by the theme. ioiti-ui's accent and material are each browser's own, chosen in the Operator menu at the end of the top bar (ioiti-ui's `UserMenu` with `appearance`, `components/AppShell.tsx`; until v0.94.0 a `LookPicker` on the Configuration page), kept beside the theme (`wata.theme.accent`, `.material`), neutral and flat (the admin as it was) until chosen, nothing of them in `config.json`. The admin's own classes follow them as the package's components do: a card it draws on the page takes `glass-card` as `Panel` does, what it marks chosen, current or as a progress takes the accent (`accent:` variants on the `--brand` tokens), and a field it draws shows its focus by its border (`focus:`, or its frame's `focus-within:` as the Pine editor's): since ioiti-ui 0.5.3 a field that takes text has no ring. The canvas charts read the accent's `--chart-series` when made, and the menu is on every page, a chart's too: `PriceChart` keys itself by the accent and the material (a canvas chart added needs the same).
-- **The admin's design and generic components are ioiti-ui** (`github:IOITI/ioiti-ui#v<version>` in `admin_ui/package.json`, IOITI's design system, made from this interface): the tokens and the design (`src/styles/index.css` imports `ioiti-ui/styles.css`), EasyUI's components as the admin had changed them, the blocks of the pages (`Panel`, `PageHeader`, `KpiTile`, `Hint`, `ButtonLink`, `QueryState`, `SignedValue`, `StatusBadge`…), the formats, the shell (`RouterAppShell`, the trail, the 404), imported from `'ioiti-ui'` and `'ioiti-ui/react-router'`. A change to one of them is made in ioiti-ui (its `docs/easyui-changes.md` lists EasyUI's), released as a tag and installed here: never a copy back in `admin_ui`. What is WATA's stays here: the menu (`components/navigation.ts`), the shell's content (`components/AppShell.tsx`: the states (`stateItems.ts`), the sidebar's badges (`menuBadges.ts`), the live pill, the palette, the bell, the Operator menu), `ConfirmLiveAction`, `NotFoundState` (the way back to the dashboard), `ActionBadge`, `ClaudeBadge`, `BrandMark`, what the charts are given (`components/charts/PerformanceCharts.tsx`), the price charts (Lightweight Charts, Vela), `formatWallTime` (`lib/wallTime.ts`) and every page. `App.tsx` puts `IoitiProvider` (the name ending every tab's title) around the router and `RouterRoot` at its root route (the router's links for every component, and the toasts, which rise above a page's `SaveBar`); a test that follows a link drawn by a component of the package mounts the page under `RouterRoot` as the application does (`test/WithTrail.tsx` does). Since 0.3.0 a change of page is a cross-fade (React's `ViewTransition`, which waits for the browser's next frame) and a table's filters are a filter group: a column's options are a list opened from its button (a test opens it and ticks a box), a column of two an on/off pair, "Clear filters" clearing them all. Since 0.4 the admin writes none of what the package has: the Configuration page's bar and its leave guard are its `SaveBar` and `RouterLeaveGuard` (`within="/config"`; the sign-in a lapsed session goes to let through by `isSignIn` of `features/auth/returnPath.ts`, as in the script editor), every list of changes its `ChangeList` (`keyChanges` for config.json's keys), an open position's live value its `SignedValue`, `LiveValue` and `RelativeTime` (`features/positions/PositionLiveValue.tsx`, on its `useNow`), and the charts that were Recharts' its `LineChart` and `BarChart` (Recharts is gone). Since 0.4.3 nothing of the package is wider than its place on a phone (its charts take their container's width, a `Panel` its column's), and the shell's page never scrolls sideways: what would stand past its edge is cut there (`overflow-x: clip`). So a table wider than a phone goes in a frame of its own: ioiti-ui's `Table`, or a `<div className="relative overflow-x-auto">`, positioned so that its words for screen readers (`sr-only`) stay in it; without a frame it is cut, not scrolled to. Since 1.0 (1.0.0-rc.2, WATA v0.102.0) its components are named by their roles (`Dialog`, `Sheet`, `Tabs`, `SelectMenu`, `Switch`, `StatusIsland`, `ComparisonTable`, `WorldClock`, `FileUpload`; EasyUI's names by motion are gone) and their props as `docs/conventions.md` of ioiti-ui says (`href`, `pending`, `tone`, `aria-label`, `density`, `value`/`onChange`); a status tone is `StatusTone` (`success`, `danger`), a figure's way `SignTone` (`positive`, `negative`), and WATA's own models that feed a meter, a badge or a chart's limit say the former. Its words are its catalogue's (`useMessages()`; `ioiti-ui/locales/en` outside React, as `features/system/serviceMap.ts` reads the health's). Its toasts keep their live regions from the start, one an empty `role="alert"`: a page's alert is found by `findAlert` of `src/test/alerts.ts` under the shell's providers. A version that deprecates a name says so once in development; `npx ioiti-ui-codemod src dev` (in `admin_ui`) rewrites it, `--check` lists what it cannot (a value computed, which the type checker then holds).
+- **The admin's design and generic components are ioiti-ui** (`github:IOITI/ioiti-ui#v<version>` in `admin_ui/package.json`, IOITI's design system, made from this interface): the tokens and the design (`src/styles/index.css` imports `ioiti-ui/styles.css`), EasyUI's components as the admin had changed them, the blocks of the pages (`Panel`, `PageHeader`, `KpiTile`, `Hint`, `ButtonLink`, `QueryState`, `SignedValue`, `StatusBadge`…), the formats, the shell (`RouterAppShell`, the trail, the 404), imported from `'ioiti-ui'` and `'ioiti-ui/react-router'`. A change to one of them is made in ioiti-ui (its `docs/easyui-changes.md` lists EasyUI's), released as a tag and installed here: never a copy back in `admin_ui`. What is WATA's stays here: the menu (`components/navigation.ts`), the shell's content (`components/AppShell.tsx`: the states (`stateItems.ts`), the sidebar's badges (`menuBadges.ts`), the live pill, the palette, the bell, the Operator menu), `ConfirmLiveAction`, `NotFoundState` (the way back to the dashboard), `ActionBadge`, `ClaudeBadge`, `BrandMark`, what the charts are given (`components/charts/PerformanceCharts.tsx`), the price charts (Lightweight Charts, Vela), `formatWallTime` (`lib/wallTime.ts`) and every page. `App.tsx` puts `IoitiProvider` (the name ending every tab's title) around the router and `RouterRoot` at its root route (the router's links for every component, and the toasts, which rise above a page's `SaveBar`); a test that follows a link drawn by a component of the package mounts the page under `RouterRoot` as the application does (`test/WithTrail.tsx` does). Since 0.3.0 a change of page is a cross-fade (React's `ViewTransition`, which waits for the browser's next frame) and a table's filters are a filter group: a column's options are a list opened from its button (a test opens it and ticks a box), a column of two an on/off pair, "Clear filters" clearing them all. What the package has is not written again here, and since ioiti-ui 1.0.0-rc.3 two commands of its own hold that (in `admin_ui`). `npx ioiti-ui doctor` says where a page wrote by hand what the package has (a `<table>` in the classes of a `Table`, a grid of tiles in a `KpiGrid`'s, a `title` where a `Hint` says it; and as advice a `<dl>`, buttons pressed one at a time, a colour without its dark value beside it), `npx ioiti-ui doctor --fix` writes a table or a grid as the component with no class moving, and `ioiti-doctor.json` holds what is left by hand, which only shrinks: `npm run doctor` (CI) refuses a new one, `npx ioiti-ui doctor --update-baseline` brings it down once one is gone, and `// ioiti-ui: by hand, <why>` on the line above says one is on purpose. How the package is used (which component for what, the rules of its design, where each component's guidelines, props and examples are) is its own guide, the block between two marks at the end of this file, written from the version installed and never by hand: after an update of ioiti-ui, `npx ioiti-ui guide ../AGENTS.md`, or `npm run guide` (CI) fails. Since 0.4: the Configuration page's bar and its leave guard are its `SaveBar` and `RouterLeaveGuard` (`within="/config"`; the sign-in a lapsed session goes to let through by `isSignIn` of `features/auth/returnPath.ts`, as in the script editor), every list of changes its `ChangeList` (`keyChanges` for config.json's keys), an open position's live value its `SignedValue`, `LiveValue` and `RelativeTime` (`features/positions/PositionLiveValue.tsx`, on its `useNow`), and the charts that were Recharts' its `LineChart` and `BarChart` (Recharts is gone). Since 0.4.3 nothing of the package is wider than its place on a phone (its charts take their container's width, a `Panel` its column's), and the shell's page never scrolls sideways: what would stand past its edge is cut there (`overflow-x: clip`). So a table is ioiti-ui's `Table` (`density="compact"` for a screen of data, `"dense"` for figures side by side; a class of its own on a part where it needs one), which scrolls in its own frame, positioned so that its words for screen readers (`sr-only`) stay in it; never a `<table>` with classes of its own in a `<div className="relative overflow-x-auto">`, as the pages wrote them until v0.108.0. Those still by hand are the ones a `Table` does not draw as they are (a sweep's grid of buttons, a frame that scrolls down or holds a note, rows another component draws, a body without the density's lines): `ioiti-doctor.json` lists their files. Without a frame a table is cut, not scrolled to. Since 1.0 (1.0.0-rc.2, WATA v0.102.0) its components are named by their roles (`Dialog`, `Sheet`, `Tabs`, `SelectMenu`, `Switch`, `StatusIsland`, `ComparisonTable`, `WorldClock`, `FileUpload`; EasyUI's names by motion are gone) and their props as `docs/conventions.md` of ioiti-ui says (`href`, `pending`, `tone`, `aria-label`, `density`, `value`/`onChange`); a status tone is `StatusTone` (`success`, `danger`), a figure's way `SignTone` (`positive`, `negative`), and WATA's own models that feed a meter, a badge or a chart's limit say the former. Its words are its catalogue's (`useMessages()`; `ioiti-ui/locales/en` outside React, as `features/system/serviceMap.ts` reads the health's). Its toasts keep their live regions from the start, one an empty `role="alert"`: a page's alert is found by `findAlert` of `src/test/alerts.ts` under the shell's providers. A version that deprecates a name says so once in development; `npx ioiti-ui-codemod src dev` (in `admin_ui`) rewrites it, `--check` lists what it cannot (a value computed, which the type checker then holds).
 - **What leads to another page is a link**, which can be opened in another tab: the menu (EasyUI's `Sidebar` given `href`s and `RouterLink`), a button that goes somewhere (ioiti-ui's `ButtonLink`, a disabled button when there is nowhere to go), a tab whose view has an address (ioiti-ui's `Tabs` given `href`s: a run's `?tab=`, the positions' `?status=`, an asset's `?tab=`). Only actions are buttons. A link whose click does something in place (a trade opened on its day) leaves a click with a modifier to the browser (ioiti-ui's `isPlainClick`). A part of the page shown (`#trust`) is a plain `<a>`, never a route: ioiti-ui's `RouterLink` draws it so, and the browser scrolls the shell's page to it.
 - **A page whose address names nothing shows EasyUI's 404** (`components/NotFoundState.tsx`, around ioiti-ui's `NotFoundState`): the router's catch-all, and each page that reads one thing by the id in its address, on the API's 404 (`isNotFound` in `src/lib/api.ts`): a run and its day, a script, an asset, a provider. It names the page in the trail and the tab, shows the address and offers up to three pages. A new page of one thing does the same, after its hooks and before its `PageHeader`.
 - **A page that fails shows why inside the shell** (ioiti-ui's `RouterErrorPage`, since v0.102.0): `App.tsx` gives it to a route without a path under the shell's, holding every page, and to the root as the last resort. A page that throws as it draws says so in place of itself, the menu kept; a lazy page whose file a deploy replaced says it could not be loaded and offers Reload. Each is reported once a minute through `IoitiProvider`'s `onError` (`src/lib/clientErrors.ts`) to `POST /api/client-errors` (`src/admin/client_errors.py`), which writes one WARNING line of the admin's log (the Logs page, Admin) and nothing else: its texts bounded, ten lines a minute, its stack indented so that no line of it reads as an entry, cleaned of secrets as every line is. Only the page's path goes, never its query.
@@ -540,6 +542,229 @@ PYTHONPATH=./:src/ python3 src/release/manifest.py --root . --no-platform
 
 ## CI / Deploy
 
-- **CI**: GitHub Actions (`.github/workflows/ci.yml`), on push/PR to main. Five jobs: `tests.sh` on each Python of the matrix; the image built for each, with the Pine runner built into it first, `python -m src.release.check` run inside it (what the install checks: every service loads, the libraries, the validators, the runner confined) and the manifest read inside it as the server reads it; the images built by the server's own `docker_build.sh`, with a toy compose project on real Docker where one pinned container is recreated alone and the other untouched; the live tests against PostgreSQL and RabbitMQ; the admin interface. `tests/test_deploy_compose.py` keeps the workflow, the `Dockerfile` and the compose file saying the same thing (the Python of the image is in the matrix, the live tests get the compose file's images)
+- **CI**: GitHub Actions (`.github/workflows/ci.yml`), on push/PR to main. Five jobs: `tests.sh` on each Python of the matrix; the image built for each, with the Pine runner built into it first, `python -m src.release.check` run inside it (what the install checks: every service loads, the libraries, the validators, the runner confined) and the manifest read inside it as the server reads it; the images built by the server's own `docker_build.sh`, with a toy compose project on real Docker where one pinned container is recreated alone and the other untouched; the live tests against PostgreSQL and RabbitMQ; the admin interface (its lint, ioiti-ui's guide in this file and its doctor, its types, its tests, its build). `tests/test_deploy_compose.py` keeps the workflow, the `Dockerfile` and the compose file saying the same thing (the Python of the image is in the matrix, the live tests get the compose file's images)
 - **Build package**: `./package.sh` → creates `wata_app_v<VERSION>.zip`
 - **Deploy**: `./deploy_app_to_your_server.sh` from `deploy/tools` (Ansible playbook `deploy_app.yml`): installs the release beside what runs (nothing stops), says the plan, then applies what may go now (`watadeploy apply`); what is held back waits for `watadeploy apply` or the System page. `-e apply=none` installs only, `-e services=...` applies those, `-e force=true` whatever holds them back, `-e full=true` stops and starts everything (infrastructure changes)
+
+<!-- ioiti-ui:guide start (written by `npx ioiti-ui guide`: change nothing down to its end) -->
+
+## ioiti-ui
+
+This application is made with ioiti-ui, its design system: the design, the components, the shell. What stands between
+the two marks is written by `npx ioiti-ui guide` from the version installed: change nothing in it, and run the command
+again after an update.
+
+### Before writing markup
+
+What a page needs is, almost always, a component of the package. Look in the list below first: a page next door may
+have been written before the component was, and is no model to copy.
+
+- **Rows of records or figures**: `Table` (`density="compact"` for a screen of data, `"dense"` for figures read
+  across), never a `<table>` with classes of its own. To search, sort, filter or page through them: `DataTable`.
+- **The figures a page is about**: `KpiTile`s in a `KpiGrid`, never a grid of its own.
+- **Terms and their values**: `DescriptionList`, where one of its layouts draws it.
+- **Two to five choices, one chosen**: `SegmentedControl`. One thing on or off: a `Switch`.
+- **What a control means, or why it is disabled**: a `Hint` (`IconButton` has its own, `hint`), never a `title`.
+- **What leads to a page**: `ButtonLink`, `TextLink`, an `href` on a tab or a menu entry. Only actions are buttons.
+- **Data that is fetched**: `QueryState` around it (loading, failed, nothing), an `EmptyState` where there is nothing.
+- **A number, an amount, a percentage, a moment**: `useFormat()` (`formatNumber`, `formatMoney`… outside React),
+  never written by hand.
+
+### The rules of the design
+
+- **Two values for every colour**: a token that has both (`text-muted-foreground`, `bg-surface`, `text-positive`).
+  A colour named by hand (a step of a palette, a hex, white or black) has its dark value beside it
+  (`text-neutral-600 dark:text-neutral-400`), never one theme alone.
+- **Text is 4.5:1 on its surface, and colour is never alone**: a status has its word, a change its sign.
+- **One focus ring**, the stylesheet's: no ring of a component's own. A field that takes text shows its focus by its
+  border.
+- **The accent and the glass only add**: what is chosen or primary keeps its classes and adds `accent:` ones; a card
+  drawn by hand takes `glass-card`, as a `Panel` does.
+- **One dialog at a time.** What opens beside its trigger is the package's (`Popover`, `DropdownMenu`), never placed
+  by hand.
+- **A test finds a component as a person does**, by its role and its name, never by its markup or its classes.
+
+### Where to read more
+
+- **A component**: `admin_ui/node_modules/ioiti-ui/dist/guide/components/<Name>.md`, its guidelines, its props and its examples. Read it before using
+  a component for the first time.
+- **An example's code**: `admin_ui/node_modules/ioiti-ui/dist/guide/examples/`, a file per example, each written as an application would write it.
+- **What a version changed, and what to do about it**: `admin_ui/node_modules/ioiti-ui/CHANGELOG.md`, under Upgrading.
+  `npx ioiti-ui-codemod` rewrites the names a version changed.
+- **What this application wrote by hand that the package has**: `npx ioiti-ui doctor` says where, and what to read;
+  `npx ioiti-ui doctor --fix` writes a table or a grid of tiles as the component, no class moving.
+
+### The components
+
+Each is imported from `ioiti-ui` unless its line says otherwise.
+
+**Shell**
+
+- `IoitiProvider`, `ThemeProvider`, `LinkProvider`: What every page of an application needs, put once around its router.
+- `RouterRoot`, `RouterAppShell`, `RouterLink` (from `ioiti-ui/react-router`): The root route of an application on React Router (`ioiti-ui/react-router`).
+- `RouterLeaveGuard` (from `ioiti-ui/react-router`): Asks before a page is left with changes not saved.
+- `RouterErrorPage` (from `ioiti-ui/react-router`): What a route shows when it fails (`ioiti-ui/react-router`, a route's `errorElement`).
+- `AppShell`, `AppBrand`, `SidebarFooterButton`: The frame of every page.
+- `Sidebar`: The application's menu, beside the page from 768px up and a drawer below.
+- `TopBarTrail`, `PageTrailProvider`: Where the page is, in the top bar of every page.
+- `AuthLayout`: A sign-in page, outside the shell.
+- `SignInProviders`: Single sign-on beside the form of a password.
+
+**Page layout**
+
+- `PageHeader`: The title of a page and what it does, with its actions on the right; it names the browser tab and ends the top bar's trail.
+- `Panel`: The box every section of a page sits in.
+- `ResizablePanels`, `ResizablePanel`, `ResizableHandle`: Panels side by side or one over the other, each sized by the handle between them.
+- `Disclosure`: More, shown on demand.
+- `Accordion`: Questions and their answers, opened one at a time or several.
+- `SaveBar`: The bar of unsaved changes, at the bottom of the page while there are any.
+
+**Top bar and account**
+
+- `UserMenu`: Who is signed in, at the end of the top bar.
+- `Avatar`: A person, as their picture or their initials, named for a screen reader; `AvatarGroup` overlaps several, each named in a hint and the rest said as +N.
+- `ThemeToggle`: One button for the theme in three states, follow the system, light, dark.
+- `LookPicker`: The accent and the material, each person's own.
+- `StateChip`: A state the user must not miss, in the top bar of every page while it applies.
+- `StateSummary`: The states the user must not miss, in one control of the top bar.
+- `NotificationBell`: What happened while the page was open, newest first, each leading to where it is dealt with; only what is urgent pulses.
+- `SpotlightSearch`: A palette that goes somewhere.
+- `ShortcutsDialog`: The list of the application's keyboard shortcuts, by group, on `?`.
+
+**Actions**
+
+- `Button`: It does something on the page: primary for the one thing a page or a dialog is for, outline or ghost for the others, danger for what removes.
+- `ButtonLink`: It leads to another page, drawn as a button: a link all the same, opened in another tab with ⌘ or Ctrl.
+- `IconButton`: An icon says it where words have no room: the top bar, a row of a table. Named in words for screen readers.
+- `SplitButton`: One action asked most, and its variants behind a chevron. Actions of their own on a thing are a DropdownMenu.
+- `CopyButton`: A value to copy, saying it did.
+- `ExportButton`: The rows a page shows, saved as a CSV file.
+- `ConfirmAction`: What matters, or cannot be undone: a dialog that says what will happen, then a slide (a plain button, to pause).
+- `DragToConfirm`: The slide alone, outside a dialog.
+
+**Forms**
+
+- `Field`: A control under its label.
+- `Form`: A form laid out by hand, from its parts.
+- `Input`: A line of text: a name, an address, an amount, a password, a search.
+- `Textarea`: Several lines: a note, a message.
+- `Select`: One value from a short list, in the system’s own list: at home on a phone.
+- `Combobox`: One value from a list long enough to search. Options with a second line and no search: a SelectMenu; several values, a MultiSelect.
+- `NumberInput`: A number with its unit and its bounds, stepped with the arrow keys too.
+- `OTPInput`: A one-time code, a box per digit.
+- `InlineEdit`: A value edited alone, where it is shown: a name, a title.
+- `FileUpload`: Files, each followed to what it became.
+
+**Choices**
+
+- `Checkbox`: A box ticked, then saved or sent with its form.
+- `Switch`: A setting that takes effect as it is turned.
+- `RadioGroup`: One of two to five choices shown at once, each with words of its own.
+- `SegmentedControl`: One of two to five short choices in a row: a period, a view of the same figures. Views of one thing, each a panel of its own, are Tabs.
+- `MultiSelect`: Several values from a list, typed to filter it, each a chip; a tag of one’s own.
+- `SelectMenu`: One value from a short list that opens under its button, an option with a second line. A list to search is a Combobox; the system’s own list, a Select.
+- `Slider`, `RangeSlider`: A value along a scale, or a range between two, where its place on the scale says more than its figure.
+
+**Dates and time**
+
+- `Calendar`: A day or a range, chosen in a month always in sight.
+- `DatePicker`, `DateRangePicker`: A day or a range in a form: a field that opens its calendar.
+- `DateRangeFilter`: The days a page is filtered by: the ranges asked for first, as buttons, a calendar for any other.
+- `TimeRangePicker`, `AutoRefresh`: A range of time said from now (“Last 24 hours”), which stays true as time goes by, refreshed by a press or on a timer.
+- `RelativeTime`: A moment said from now ("3 min ago", "in 2 h"), kept true as time goes by, its full date in a hint and for a screen reader.
+- `WorldClock`: The time of a few cities, as a departures board of dot-matrix characters; small, two of them fit beside a page's title.
+
+**Feedback**
+
+- `Alert`: A message in the page, there until it is dealt with; danger and warning read out at once.
+- `Badge`: A short state or a count, beside what it describes.
+- `StatusBadge`: The state of something running, in a word, as a health check reports it.
+- `CheckList`, `CheckIcon`: Checks, and what each found.
+- `RequestStatus`: Something asked, followed to its outcome.
+- `ToastProvider`: Toasts: one at a time at the bottom centre, each for its whole time, shown with `useToast()` from inside `ToastProvider`.
+- `Toast`: What was just done, a moment at the bottom of the screen, from `useToast()`.
+- `UndoToast`: A removal that can still be undone, in place of a question before it.
+- `StatusIsland`: What is live, everywhere: a pill in the top bar that opens over the page.
+
+**Loading and empty**
+
+- `Loader`: A wait without a known end: a press, a short request.
+- `Skeleton`: Content on its way, drawn as high as it will be.
+- `ProgressBar`: Work whose progress is known, said in words beside the bar. How much of a limit is used is a Meter.
+- `QueryState`: Data a page fetches: its loading, its failure and a failed refresh, in one.
+- `EmptyState`: A page, a panel or a table with nothing to show yet, and the way to something.
+- `EmptyText`, `ErrorText`: Nothing to show, in one quiet line; what went wrong with an action, under its button (`ErrorText`).
+- `ErrorState`, `ErrorBoundary`: A page, or a part of one, that failed: what went wrong, and the way on.
+- `NotFoundState`, `NotFoundPage`, `NotFound`: A record that does not exist: its API answered 404.
+
+**Overlays**
+
+- `Hint`: What a control means, or why it is disabled, in place of a `title`.
+- `Tooltip`: The tooltip a `Hint` draws: alone, for a delay, an alignment or an arrow of its own.
+- `PeekLink`, `PeekCard`: A preview of where a link leads, without leaving the page.
+- `Popover`: Filters or a few settings beside their button, the page still in use.
+- `DropdownMenu`, `ContextMenu`: The actions on a thing, behind a button or at the pointer.
+- `Dialog`: A decision, or a short form, that holds the page until it is answered. What cannot be undone: a ConfirmAction.
+- `Sheet`: A record or a form from a side of the page, over it or beside it.
+- `ProductTour`: A walk through a page, one part at a time.
+
+**Navigation**
+
+- `Tabs`: Views of one thing, one shown at a time; a view with an address, a link. Two to five choices that change one view: a SegmentedControl.
+- `Breadcrumb`: Where a page is, from Home, on a page outside the shell; inside it, the top bar draws the trail of every page (TopBarTrail).
+- `Stepper`, `StepPanels`: A task done in steps, in order.
+- `TextLink`: A link made of words: in a sentence, a list, a panel’s way further.
+- `ScrollProgressNav`: The parts of one long page, the one being read marked.
+
+**Tables and lists**
+
+- `Table`: A short list of records or figures, to read.
+- `DataTable`, `AdvancedDataTable`: Records to search, sort, filter, select and open, a page at a time.
+- `SelectionBasket`: What a selection of rows can do, while there is one.
+- `DescriptionList`: One record’s terms and their details, or figures side by side.
+- `ComparisonTable`: Several things side by side, row by row: plans, offers, configurations.
+- `ChangeList`: What changes, from its value before to its value after.
+- `InteractiveTimeline`: What happened to something, step by step.
+- `RecoveryLedger`: Versions of something, newest first, an earlier one restored.
+
+**Figures**
+
+- `KpiTile`, `KpiGrid`: The figures a page is about, in tiles, the lead one twice as wide.
+- `KpiStrip`: Figures that come second, side by side in one panel.
+- `StatCard`, `StatGrid`: A figure and its line over time, read point by point.
+- `Meter`: A ratio against a limit, as a bar: a disk filled, a quota used.
+- `SignedValue`: A change with its sign and its tone, in a sentence or a cell.
+- `AnimatedNumber`: A figure whose digits roll to each new value.
+- `LiveValue`: A figure that changes as it is watched, each change shown a moment.
+- `StatusHistory`: A state over time, a block per slot: an uptime.
+
+**Charts**
+
+- `LineChart`, `FanChart`: Values over time, up to four series; ranges that widen as they go, a `FanChart`.
+- `LiveLineChart`: A value as it arrives, over the last minutes.
+- `BarChart`: Values by category, side by side or stacked.
+- `BarList`: Things ranked by a figure, a row each, their labels whole.
+- `DonutChart`: Parts of a whole, or one value against its limit.
+- `FunnelChart`: Where things went, stage after stage, and what each lost.
+- `ActivityHeatmap`: Days on a calendar, or weekdays by the hour.
+- `Sparkline`: A figure’s trend, small and without axes, in a tile or a cell.
+- `ChartLegend`: What a chart's colours stand for, each swatch drawn as the chart draws its series (a bar, a line, a dashed line, a point, a moment marked); its items can show and hide their series.
+- `DependencyTrace`: What calls what, and the health of each.
+
+**Code**
+
+- `CodeBlock`, `Code`: Code to read and copy (a payload, a configuration, a command, a diff), coloured in the `code-*` tokens; `Code` for a reference inside a sentence.
+- `CodeEditor` (from `ioiti-ui/code`): Code to edit (a configuration, a rule, a document), from `ioiti-ui/code`.
+- `DiffEditor` (from `ioiti-ui/code`): Two versions of a text and what changed between them, from `ioiti-ui/code`.
+- `LogViewer`: A job's output as it is written (a build, a deploy, an import).
+- `Kbd`: The keys of a shortcut, as this computer writes them and its language names them.
+- `CopyChip`: A value to read and copy, in a chip with its copy button.
+
+**AI**
+
+- `AIResponse`: An assistant's answer.
+- `AIAgentActivity`, `AgentActivityHeader`, `AgentActivityTimeline`, `AgentActivityItem`, `AgentActivityNotes`: What an assistant did, step by step.
+- `PromptComposer`: A request to an assistant.
+- `AttachmentChip`: Something attached to a request or a message.
+
+<!-- ioiti-ui:guide end -->

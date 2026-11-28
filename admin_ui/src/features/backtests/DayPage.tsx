@@ -15,6 +15,12 @@ import {
   Panel,
   QueryState,
   SignedValue,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeaderCell,
+  TableRow,
   useTheme,
 } from 'ioiti-ui'
 import { ChevronLeft, ChevronRight, Sparkles } from 'lucide-react'
@@ -229,31 +235,29 @@ function TradeDetail({ run, trade, day, signals }: { run: BacktestRun; trade: Ba
             {candidates.length === 0 ? (
               <p className="text-sm text-muted-foreground">-</p>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs">
-                  <thead className="text-muted-foreground">
-                    <tr>
-                      <th scope="col" className="py-1.5 pr-3 font-medium">Turbo</th>
-                      <th scope="col" className="py-1.5 pr-3 text-right font-medium">Knock-out</th>
-                      <th scope="col" className="py-1.5 pr-3 text-right font-medium">Bid</th>
-                      <th scope="col" className="py-1.5 text-right font-medium">Ask</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border/40">
-                    {candidates.map((candidate) => (
-                      <tr key={candidate.instrument_id} className={cn(candidate.chosen && 'font-semibold', !candidate.in_range && 'text-muted-foreground')}>
-                        <td className="py-1.5 pr-3">
-                          {candidate.symbol ?? candidate.instrument_id} {candidate.issuer}
-                          {candidate.chosen && <Badge tone="success" className="ml-2">bought</Badge>}
-                        </td>
-                        <td className="py-1.5 pr-3 text-right tabular-nums">{formatNumber(candidate.barrier)}</td>
-                        <td className="py-1.5 pr-3 text-right tabular-nums">{candidate.bid ?? '-'}</td>
-                        <td className="py-1.5 text-right tabular-nums">{candidate.ask ?? '-'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <Table density="compact">
+                <TableHead>
+                  <TableRow>
+                    <TableHeaderCell scope="col" className="py-1.5 pr-3">Turbo</TableHeaderCell>
+                    <TableHeaderCell numeric scope="col" className="py-1.5 pr-3">Knock-out</TableHeaderCell>
+                    <TableHeaderCell numeric scope="col" className="py-1.5 pr-3">Bid</TableHeaderCell>
+                    <TableHeaderCell numeric scope="col" className="py-1.5">Ask</TableHeaderCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {candidates.map((candidate) => (
+                    <TableRow key={candidate.instrument_id} className={cn(candidate.chosen && 'font-semibold', !candidate.in_range && 'text-muted-foreground')}>
+                      <TableCell className="py-1.5 pr-3">
+                        {candidate.symbol ?? candidate.instrument_id} {candidate.issuer}
+                        {candidate.chosen && <Badge tone="success" className="ml-2">bought</Badge>}
+                      </TableCell>
+                      <TableCell numeric className="py-1.5 pr-3">{formatNumber(candidate.barrier)}</TableCell>
+                      <TableCell numeric className="py-1.5 pr-3">{candidate.bid ?? '-'}</TableCell>
+                      <TableCell numeric className="py-1.5">{candidate.ask ?? '-'}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
             )}
             <p className="text-xs text-muted-foreground">
               The twenty closest to their knock-out level that were recorded and alive then; the lowest bid in the price range was bought.
